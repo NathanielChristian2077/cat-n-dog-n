@@ -1,0 +1,90 @@
+{
+  "config": {
+    "data_dir": "dataset",
+    "output_dir": "runs/cnn_scratch_v2",
+    "image_size": 224,
+    "batch_size": 32,
+    "epochs": 40,
+    "learning_rate": 0.001,
+    "weight_decay": 0.0001,
+    "num_workers": 8,
+    "prefetch_factor": 2,
+    "seed": 42,
+    "positive_class": "dogs",
+    "device": "cuda",
+    "use_amp": true,
+    "deterministic": false,
+    "enable_tf32": true,
+    "channels_last": true,
+    "balance_positive_class": true,
+    "early_stopping_patience": 8,
+    "scheduler_patience": 2,
+    "scheduler_factor": 0.5,
+    "max_grad_norm": 5.0
+  },
+  "training_schedule": {
+    "updates_per_epoch": 10,
+    "scheduler_patience": 8,
+    "scheduler_warmup_epochs": 4,
+    "early_stopping_patience": 20
+  },
+  "dataset": {
+    "root": "dataset",
+    "split_dirs": {
+      "test": "dataset/test",
+      "train": "dataset/train",
+      "val": "dataset/validation"
+    },
+    "sizes": {
+      "train": 300,
+      "val": 100,
+      "test": 100
+    },
+    "class_names": [
+      "cat",
+      "dog"
+    ],
+    "class_counts": {
+      "train": {
+        "negative": 150,
+        "positive": 150
+      },
+      "val": {
+        "negative": 50,
+        "positive": 50
+      },
+      "test": {
+        "negative": 50,
+        "positive": 50
+      }
+    }
+  },
+  "class_balance": {
+    "enabled": false,
+    "pos_weight": 1.0
+  },
+  "runtime": {
+    "timestamp_utc": "2026-06-24T20:16:08.844112+00:00",
+    "python": "3.14.5",
+    "platform": "Linux-6.18.33.1-microsoft-standard-WSL2-x86_64-with-glibc2.43",
+    "logical_cpu_count": 16,
+    "pytorch": "2.12.1+cu130",
+    "torch_cuda_build": "13.0",
+    "device": "cuda",
+    "cuda_available": true,
+    "cudnn_benchmark": true,
+    "cudnn_deterministic": false,
+    "gpu_name": "NVIDIA GeForce RTX 4070 SUPER",
+    "gpu_memory_gb": 11.99,
+    "gpu_compute_capability": "8.9",
+    "cudnn_version": 92000,
+    "tf32_matmul": true,
+    "tf32_cudnn": true
+  },
+  "optimizer": "AdamW(fused=True)",
+  "model": {
+    "name": "ScratchCNN",
+    "trainable_parameters": 304097,
+    "architecture": "ScratchCNN(\n  (features): Sequential(\n    (0): ConvNormAct(\n      (0): Conv2d(3, 32, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)\n      (1): BatchNorm2d(32, eps=1e-05, momentum=0.1, affine=True, bias=True, track_running_stats=True)\n      (2): ReLU(inplace=True)\n    )\n    (1): ConvNormAct(\n      (0): Conv2d(32, 32, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)\n      (1): BatchNorm2d(32, eps=1e-05, momentum=0.1, affine=True, bias=True, track_running_stats=True)\n      (2): ReLU(inplace=True)\n    )\n    (2): MaxPool2d(kernel_size=2, stride=2, padding=0, dilation=1, ceil_mode=False)\n    (3): ConvNormAct(\n      (0): Conv2d(32, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)\n      (1): BatchNorm2d(64, eps=1e-05, momentum=0.1, affine=True, bias=True, track_running_stats=True)\n      (2): ReLU(inplace=True)\n    )\n    (4): ConvNormAct(\n      (0): Conv2d(64, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)\n      (1): BatchNorm2d(64, eps=1e-05, momentum=0.1, affine=True, bias=True, track_running_stats=True)\n      (2): ReLU(inplace=True)\n    )\n    (5): MaxPool2d(kernel_size=2, stride=2, padding=0, dilation=1, ceil_mode=False)\n    (6): ConvNormAct(\n      (0): Conv2d(64, 128, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)\n      (1): BatchNorm2d(128, eps=1e-05, momentum=0.1, affine=True, bias=True, track_running_stats=True)\n      (2): ReLU(inplace=True)\n    )\n    (7): ConvNormAct(\n      (0): Conv2d(128, 128, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)\n      (1): BatchNorm2d(128, eps=1e-05, momentum=0.1, affine=True, bias=True, track_running_stats=True)\n      (2): ReLU(inplace=True)\n    )\n    (8): MaxPool2d(kernel_size=2, stride=2, padding=0, dilation=1, ceil_mode=False)\n  )\n  (classifier): Sequential(\n    (0): AdaptiveAvgPool2d(output_size=(1, 1))\n    (1): Flatten(start_dim=1, end_dim=-1)\n    (2): Linear(in_features=128, out_features=128, bias=True)\n    (3): ReLU(inplace=True)\n    (4): Dropout(p=0.1, inplace=False)\n    (5): Linear(in_features=128, out_features=1, bias=True)\n  )\n)"
+  }
+}

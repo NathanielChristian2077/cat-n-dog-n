@@ -1,0 +1,139 @@
+{
+  "architecture": {
+    "identifier": "resnet18",
+    "display_name": "ResNet18",
+    "weights": "ResNet18_Weights.IMAGENET1K_V1",
+    "weights_url": "https://download.pytorch.org/models/resnet18-f37072fd.pth",
+    "final_stage": "layer4",
+    "parameters_millions_reference": 11.69,
+    "flops_giga_reference": 1.81,
+    "evaluation_crop_size": [
+      224
+    ],
+    "evaluation_resize_size": [
+      256
+    ],
+    "normalization_mean": [
+      0.485,
+      0.456,
+      0.406
+    ],
+    "normalization_std": [
+      0.229,
+      0.224,
+      0.225
+    ],
+    "interpolation": "InterpolationMode.BILINEAR"
+  },
+  "selected_checkpoint": {
+    "path": "runs/transfer_comparison/resnet18/seed_42/checkpoints/best_val_loss.pt",
+    "phase": "finetune",
+    "global_epoch": 14,
+    "best_validation_loss": 0.048746230602264407
+  },
+  "phases": {
+    "head": {
+      "best_checkpoint": "runs/transfer_comparison/resnet18/seed_42/checkpoints/head_best_val_loss.pt",
+      "best_validation_loss": 0.10069217681884765,
+      "best_phase_epoch": 12,
+      "completed_epochs": 12,
+      "trainability": {
+        "phase": "head",
+        "trainable_modules": "classifier",
+        "total_parameters": 11177538,
+        "trainable_parameters": 1026
+      }
+    },
+    "finetune": {
+      "best_checkpoint": "runs/transfer_comparison/resnet18/seed_42/checkpoints/finetune_best_val_loss.pt",
+      "best_validation_loss": 0.048746230602264407,
+      "best_phase_epoch": 2,
+      "completed_epochs": 8,
+      "trainability": {
+        "phase": "finetune",
+        "trainable_modules": "layer4, classifier",
+        "total_parameters": 11177538,
+        "trainable_parameters": 8394754
+      }
+    }
+  },
+  "training_time_seconds": 31.606169366999893,
+  "test_evaluated": false,
+  "test_metrics": null,
+  "dataset": {
+    "root": "dataset",
+    "sizes": {
+      "train": 300,
+      "val": 100,
+      "test": 100
+    },
+    "class_names": [
+      "cat",
+      "dog"
+    ],
+    "class_counts": {
+      "train": {
+        "negative": 150,
+        "positive": 150
+      },
+      "val": {
+        "negative": 50,
+        "positive": 50
+      },
+      "test": {
+        "negative": 50,
+        "positive": 50
+      }
+    }
+  },
+  "transforms": {
+    "weights": "ResNet18_Weights.IMAGENET1K_V1",
+    "evaluation_transform": "ImageClassification(\n    crop_size=[224]\n    resize_size=[256]\n    mean=[0.485, 0.456, 0.406]\n    std=[0.229, 0.224, 0.225]\n    interpolation=InterpolationMode.BILINEAR\n)",
+    "evaluation_crop_size": 224,
+    "evaluation_resize_size": 256,
+    "normalization_mean": [
+      0.485,
+      0.456,
+      0.406
+    ],
+    "normalization_std": [
+      0.229,
+      0.224,
+      0.225
+    ],
+    "interpolation": "InterpolationMode.BILINEAR",
+    "train_augmentations": [
+      "RandomResizedCrop(scale=0.85..1.00)",
+      "RandomHorizontalFlip(p=0.50)",
+      "ColorJitter",
+      "RandomErasing(p=0.05)"
+    ]
+  },
+  "runtime": {
+    "timestamp_utc": "2026-06-24T21:55:20.210155+00:00",
+    "python": "3.14.5",
+    "platform": "Linux-6.18.33.1-microsoft-standard-WSL2-x86_64-with-glibc2.43",
+    "logical_cpu_count": 16,
+    "pytorch": "2.12.1+cu130",
+    "torch_cuda_build": "13.0",
+    "device": "cuda",
+    "cuda_available": true,
+    "cudnn_benchmark": true,
+    "cudnn_deterministic": false,
+    "gpu_name": "NVIDIA GeForce RTX 4070 SUPER",
+    "gpu_memory_gb": 11.99,
+    "gpu_compute_capability": "8.9",
+    "cudnn_version": 92000,
+    "tf32_matmul": true,
+    "tf32_cudnn": true
+  },
+  "artifacts": {
+    "best_checkpoint": "runs/transfer_comparison/resnet18/seed_42/checkpoints/best_val_loss.pt",
+    "phase1_checkpoint": "runs/transfer_comparison/resnet18/seed_42/checkpoints/head_best_val_loss.pt",
+    "phase2_checkpoint": "runs/transfer_comparison/resnet18/seed_42/checkpoints/finetune_best_val_loss.pt",
+    "history": "runs/transfer_comparison/resnet18/seed_42/artifacts/history.csv",
+    "learning_curves": "runs/transfer_comparison/resnet18/seed_42/plots/learning_curves.png",
+    "confusion_matrix": "runs/transfer_comparison/resnet18/seed_42/plots/confusion_matrix_test.png",
+    "test_predictions": "runs/transfer_comparison/resnet18/seed_42/artifacts/test_predictions.csv"
+  }
+}

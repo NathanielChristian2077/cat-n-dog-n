@@ -1,0 +1,10 @@
+architecture,display_name,seed,selected_phase,selected_global_epoch,best_validation_loss,head_best_validation_loss,finetune_best_validation_loss,training_time_seconds,summary_path
+resnet18,ResNet18,42,finetune,14,0.048746230602264407,0.10069217681884765,0.048746230602264407,31.606169366999893,runs/transfer_comparison/resnet18/seed_42/artifacts/run_summary.json
+resnet18,ResNet18,73,finetune,17,0.04785792112350464,0.07209137201309204,0.04785792112350464,28.423442307001096,runs/transfer_comparison/resnet18/seed_73/artifacts/run_summary.json
+resnet18,ResNet18,101,finetune,15,0.04958035945892334,0.08359492778778076,0.04958035945892334,25.803802406000614,runs/transfer_comparison/resnet18/seed_101/artifacts/run_summary.json
+efficientnet_b0,EfficientNet-B0,42,finetune,32,0.016756985187530517,0.04103775382041931,0.016756985187530517,69.75524688600126,runs/transfer_comparison/efficientnet_b0/seed_42/artifacts/run_summary.json
+efficientnet_b0,EfficientNet-B0,73,finetune,31,0.014312421083450317,0.041450634002685546,0.014312421083450317,42.29592885999955,runs/transfer_comparison/efficientnet_b0/seed_73/artifacts/run_summary.json
+efficientnet_b0,EfficientNet-B0,101,finetune,32,0.018402212858200075,0.04219050407409668,0.018402212858200075,44.26012863000142,runs/transfer_comparison/efficientnet_b0/seed_101/artifacts/run_summary.json
+convnext_tiny,ConvNeXt-Tiny,42,finetune,19,0.0016619813442230224,0.02025303840637207,0.0016619813442230224,51.70202080600211,runs/transfer_comparison/convnext_tiny/seed_42/artifacts/run_summary.json
+convnext_tiny,ConvNeXt-Tiny,73,finetune,24,0.002513376474380493,0.021285191774368287,0.002513376474380493,55.825871665001614,runs/transfer_comparison/convnext_tiny/seed_73/artifacts/run_summary.json
+convnext_tiny,ConvNeXt-Tiny,101,finetune,28,0.0014572560787200928,0.01812575340270996,0.0014572560787200928,60.25371226800053,runs/transfer_comparison/convnext_tiny/seed_101/artifacts/run_summary.json
