@@ -16,7 +16,7 @@ from torch.optim import AdamW
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader
 
-from .config import TrainingConfig
+from .config import OutputMode, TrainingConfig, get_classifier_preset
 from .data import DataBundle, build_data_bundle
 from .metrics import EvaluationResult, make_evaluation_result
 from .model import ScratchCNN, count_trainable_parameters
@@ -57,14 +57,24 @@ def _move_batch(
     device: torch.device,
     *,
     channels_last: bool,
+    output_mode: OutputMode,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     non_blocking = device.type == "cuda"
     if channels_last and device.type == "cuda":
         images = images.to(device, non_blocking=non_blocking, memory_format=torch.channels_last)
     else:
         images = images.to(device, non_blocking=non_blocking)
-    labels = labels.to(device, non_blocking=non_blocking).float().unsqueeze(1)
-    return images, labels
+
+    labels = labels.to(device, non_blocking=non_blocking)
+    if output_mode == "sigmoid1":
+        return images, labels.float().unsqueeze(1)
+    return images, labels.long()
+
+
+def _positive_probabilities(logits: torch.Tensor, output_mode: OutputMode) -> torch.Tensor:
+    if output_mode == "sigmoid1":
+        return torch.sigmoid(logits).squeeze(1)
+    return torch.softmax(logits, dim=1)[:, 1]
 
 
 def _run_loader(
@@ -73,6 +83,7 @@ def _run_loader(
     loader: DataLoader,
     criterion: nn.Module,
     device: torch.device,
+    output_mode: OutputMode,
     optimizer: torch.optim.Optimizer | None = None,
     scaler: torch.amp.GradScaler | None = None,
     amp_enabled: bool = False,
@@ -88,7 +99,13 @@ def _run_loader(
     all_probabilities: list[float] = []
 
     for images, labels in loader:
-        images, labels = _move_batch(images, labels, device, channels_last=channels_last)
+        images, labels = _move_batch(
+            images,
+            labels,
+            device,
+            channels_last=channels_last,
+            output_mode=output_mode,
+        )
         if is_training:
             optimizer.zero_grad(set_to_none=True)
 
@@ -115,8 +132,10 @@ def _run_loader(
         batch_size = labels.size(0)
         total_samples += batch_size
         total_loss += float(loss.detach().item()) * batch_size
-        all_targets.extend(labels.detach().squeeze(1).cpu().to(torch.int64).tolist())
-        all_probabilities.extend(torch.sigmoid(logits.detach()).squeeze(1).float().cpu().tolist())
+        all_targets.extend(labels.detach().reshape(-1).cpu().to(torch.int64).tolist())
+        all_probabilities.extend(
+            _positive_probabilities(logits.detach(), output_mode).float().cpu().tolist()
+        )
 
     return make_evaluation_result(
         mean_loss=total_loss / max(total_samples, 1),
@@ -137,25 +156,43 @@ def _make_optimizer(model: nn.Module, config: TrainingConfig, device: torch.devi
     return AdamW(model.parameters(), **base_kwargs), "AdamW"
 
 
+def _make_evaluation_criterion(output_mode: OutputMode) -> nn.Module:
+    return nn.BCEWithLogitsLoss() if output_mode == "sigmoid1" else nn.CrossEntropyLoss()
+
+
 def _make_training_criterion(
     bundle: DataBundle,
     config: TrainingConfig,
     device: torch.device,
-) -> tuple[nn.Module, dict[str, float | bool]]:
-    """Weight a minority positive class without altering the professor's split."""
+    output_mode: OutputMode,
+) -> tuple[nn.Module, dict[str, Any]]:
+    """Keep binary-class weighting consistent across one- and two-logit heads."""
 
     counts = bundle.class_counts["train"]
-    if not config.balance_positive_class:
-        return nn.BCEWithLogitsLoss(), {"enabled": False, "pos_weight": 1.0}
-
     pos_weight = counts["negative"] / counts["positive"]
-    if abs(pos_weight - 1.0) < 1e-12:
-        return nn.BCEWithLogitsLoss(), {"enabled": False, "pos_weight": 1.0}
+    is_balanced = abs(pos_weight - 1.0) < 1e-12
+    if not config.balance_positive_class or is_balanced:
+        return _make_evaluation_criterion(output_mode), {
+            "enabled": False,
+            "positive_weight": 1.0,
+            "loss": "BCEWithLogitsLoss" if output_mode == "sigmoid1" else "CrossEntropyLoss",
+        }
 
-    weight_tensor = torch.tensor([pos_weight], device=device, dtype=torch.float32)
-    return nn.BCEWithLogitsLoss(pos_weight=weight_tensor), {
+    if output_mode == "sigmoid1":
+        return nn.BCEWithLogitsLoss(
+            pos_weight=torch.tensor([pos_weight], device=device, dtype=torch.float32)
+        ), {
+            "enabled": True,
+            "positive_weight": float(pos_weight),
+            "loss": "BCEWithLogitsLoss(pos_weight)",
+        }
+
+    return nn.CrossEntropyLoss(
+        weight=torch.tensor([1.0, pos_weight], device=device, dtype=torch.float32)
+    ), {
         "enabled": True,
-        "pos_weight": float(pos_weight),
+        "positive_weight": float(pos_weight),
+        "loss": "CrossEntropyLoss(class_weight)",
     }
 
 
@@ -170,14 +207,21 @@ def _checkpoint_payload(
     best_val_loss: float,
     val_result: EvaluationResult,
 ) -> dict[str, Any]:
+    preset = get_classifier_preset(config.architecture)
     return {
-        "format_version": 4,
+        "format_version": 5,
         "epoch": epoch,
         "best_val_loss": best_val_loss,
         "model_state_dict": model.state_dict(),
         "optimizer_state_dict": optimizer.state_dict(),
         "scheduler_state_dict": scheduler.state_dict(),
         "config": config.as_dict(),
+        "architecture": {
+            "identifier": preset.identifier,
+            "hidden_layers": list(preset.hidden_layers),
+            "output_mode": preset.output_mode,
+            "stage1_rank": preset.stage1_rank,
+        },
         "class_names": list(bundle.class_names),
         "positive_class": bundle.positive_class,
         "class_counts": bundle.class_counts,
@@ -233,16 +277,22 @@ def _prepare_runtime_config(config: TrainingConfig) -> tuple[TrainingConfig, tor
 
 
 def _build_model(config: TrainingConfig, device: torch.device) -> ScratchCNN:
-    model = ScratchCNN()
+    preset = get_classifier_preset(config.architecture)
+    model = ScratchCNN(
+        hidden_layers=preset.hidden_layers,
+        output_mode=preset.output_mode,
+        classifier_dropout=config.classifier_dropout,
+    )
     if config.channels_last and device.type == "cuda":
         model = model.to(memory_format=torch.channels_last)
     return model.to(device)
 
 
 def run_training(config: TrainingConfig) -> RunArtifacts:
-    """Train the required CNN and persist every artifact needed by the report."""
+    """Train one preset and persist every artifact needed by the report."""
 
     config, device = _prepare_runtime_config(config)
+    preset = get_classifier_preset(config.architecture)
     config.output_dir.mkdir(parents=True, exist_ok=True)
     checkpoints_dir = config.output_dir / "checkpoints"
     plots_dir = config.output_dir / "plots"
@@ -253,6 +303,7 @@ def run_training(config: TrainingConfig) -> RunArtifacts:
 
     bundle = build_data_bundle(config)
     train_counts = bundle.class_counts["train"]
+    print(f"Arquitetura: {preset.identifier} | head={preset.hidden_layers} | saída={preset.output_mode}")
     print(
         "Classes: "
         f"train neg={train_counts['negative']}, pos={train_counts['positive']} | "
@@ -269,8 +320,13 @@ def run_training(config: TrainingConfig) -> RunArtifacts:
     )
 
     model = _build_model(config, device)
-    evaluation_criterion = nn.BCEWithLogitsLoss()
-    training_criterion, class_balance = _make_training_criterion(bundle, config, device)
+    evaluation_criterion = _make_evaluation_criterion(preset.output_mode)
+    training_criterion, class_balance = _make_training_criterion(
+        bundle,
+        config,
+        device,
+        preset.output_mode,
+    )
     optimizer, optimizer_name = _make_optimizer(model, config, device)
     scheduler = ReduceLROnPlateau(
         optimizer,
@@ -285,6 +341,13 @@ def run_training(config: TrainingConfig) -> RunArtifacts:
         artifacts_dir / "experiment_config.json",
         {
             "config": config.as_dict(),
+            "architecture": {
+                "identifier": preset.identifier,
+                "description": preset.description,
+                "stage1_rank": preset.stage1_rank,
+                "head_hidden_layers": list(preset.hidden_layers),
+                "output_mode": preset.output_mode,
+            },
             "training_schedule": {
                 "updates_per_epoch": updates_per_epoch,
                 "scheduler_patience": scheduler_patience,
@@ -329,6 +392,7 @@ def run_training(config: TrainingConfig) -> RunArtifacts:
             loader=bundle.train_loader,
             criterion=training_criterion,
             device=device,
+            output_mode=preset.output_mode,
             optimizer=optimizer,
             scaler=scaler,
             amp_enabled=amp_enabled,
@@ -340,6 +404,7 @@ def run_training(config: TrainingConfig) -> RunArtifacts:
             loader=bundle.train_eval_loader,
             criterion=evaluation_criterion,
             device=device,
+            output_mode=preset.output_mode,
             amp_enabled=amp_enabled,
             channels_last=config.channels_last,
         )
@@ -348,6 +413,7 @@ def run_training(config: TrainingConfig) -> RunArtifacts:
             loader=bundle.val_loader,
             criterion=evaluation_criterion,
             device=device,
+            output_mode=preset.output_mode,
             amp_enabled=amp_enabled,
             channels_last=config.channels_last,
         )
@@ -425,6 +491,7 @@ def run_training(config: TrainingConfig) -> RunArtifacts:
         loader=bundle.test_loader,
         criterion=evaluation_criterion,
         device=device,
+        output_mode=preset.output_mode,
         amp_enabled=amp_enabled,
         channels_last=config.channels_last,
     )
@@ -440,6 +507,13 @@ def run_training(config: TrainingConfig) -> RunArtifacts:
     prediction_frame.to_csv(artifacts_dir / "test_predictions.csv", index=False)
 
     summary = {
+        "architecture": {
+            "identifier": preset.identifier,
+            "description": preset.description,
+            "stage1_rank": preset.stage1_rank,
+            "head_hidden_layers": list(preset.hidden_layers),
+            "output_mode": preset.output_mode,
+        },
         "best_epoch": best_epoch,
         "epochs_completed": len(history),
         "training_time_seconds": elapsed_seconds,
@@ -499,14 +573,16 @@ def evaluate_checkpoint(
     )
     config = replace(config, num_workers=resolve_num_workers(config.num_workers, device))
     config.validate()
+    preset = get_classifier_preset(config.architecture)
     bundle = build_data_bundle(config)
     model = _build_model(config, device)
     model.load_state_dict(checkpoint["model_state_dict"])
     result = _run_loader(
         model=model,
         loader=bundle.test_loader,
-        criterion=nn.BCEWithLogitsLoss(),
+        criterion=_make_evaluation_criterion(preset.output_mode),
         device=device,
+        output_mode=preset.output_mode,
         amp_enabled=bool(config.use_amp and device.type == "cuda"),
         channels_last=config.channels_last,
     )
