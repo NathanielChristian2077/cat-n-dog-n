@@ -56,12 +56,7 @@ def _class_family(name: str) -> str | None:
 
 
 class BinaryImageFolder(datasets.ImageFolder):
-    """ImageFolder that remaps any two class folders into binary labels {0, 1}.
-
-    The positive class is explicit instead of relying on alphabetical folder order.
-    That avoids the charming academic classic where labels silently flip after a
-    teammate renames ``dogs`` to ``cachorros``.
-    """
+    """ImageFolder that remaps any two class folders into binary labels {0, 1}."""
 
     def __init__(
         self,
@@ -104,12 +99,7 @@ def _resolve_class_name(classes: list[str], requested: str) -> str:
 
 
 def _resolve_split_dirs(data_dir: Path) -> tuple[Path, dict[str, Path]]:
-    """Locate a professor-provided split-first layout without moving any files.
-
-    Accepted examples include ``train/val/test``, ``treino/validacao/teste`` and
-    a single enclosing directory such as ``dataset/cats_dogs/{train,val,test}``.
-    The assignment's division remains untouched; only names are normalised.
-    """
+    """Locate a professor-provided split-first layout without moving any files."""
 
     if not data_dir.is_dir():
         raise FileNotFoundError(f"Dataset não encontrado: {data_dir}")
@@ -172,32 +162,28 @@ def _binary_counts(dataset: BinaryImageFolder, split_name: str) -> dict[str, int
 
 
 def build_train_transform(image_size: int) -> transforms.Compose:
-    """Return the required RGB 224x224 preprocessing plus four augmentation groups.
+    """Return 224x224 preprocessing plus mild, distinct augmentation groups.
 
-    Augmentations used here:
-      1. RandomResizedCrop: crop/scale spatial;
-      2. RandomHorizontalFlip: reflection geometry;
-      3. ColorJitter: photometric color/intensity;
-      4. RandomErasing: random occlusion/regularization.
-
-    The assignment asks for at least three techniques from different groups; four
-    are configured so the report can identify them without playing word games.
+    The dataset has only a few hundred images. The original stronger crop and
+    erasing settings sometimes removed the animal itself, leaving a scratch CNN
+    to learn background noise. These retain the four required augmentation
+    families while keeping the perturbations realistic for a small baseline.
     """
 
     return transforms.Compose(
         [
-            transforms.RandomResizedCrop(image_size, scale=(0.80, 1.00), ratio=(0.90, 1.10)),
+            transforms.RandomResizedCrop(image_size, scale=(0.90, 1.00), ratio=(0.95, 1.05)),
             transforms.RandomHorizontalFlip(p=0.50),
-            transforms.ColorJitter(brightness=0.20, contrast=0.20, saturation=0.15, hue=0.02),
+            transforms.ColorJitter(brightness=0.10, contrast=0.10, saturation=0.08, hue=0.01),
             transforms.ToTensor(),
-            transforms.RandomErasing(p=0.20, scale=(0.02, 0.12), ratio=(0.30, 3.30), value="random"),
+            transforms.RandomErasing(p=0.05, scale=(0.02, 0.06), ratio=(0.50, 2.00), value="random"),
             transforms.Normalize(mean=RGB_MEAN, std=RGB_STD),
         ]
     )
 
 
 def build_eval_transform(image_size: int) -> transforms.Compose:
-    """Deterministic preprocessing for validation and test."""
+    """Deterministic preprocessing for validation, test, and clean train metrics."""
 
     resize_size = int(round(image_size * 1.14))
     return transforms.Compose(
@@ -213,6 +199,7 @@ def build_eval_transform(image_size: int) -> transforms.Compose:
 @dataclass(frozen=True)
 class DataBundle:
     train_loader: DataLoader
+    train_eval_loader: DataLoader
     val_loader: DataLoader
     test_loader: DataLoader
     negative_class: str
@@ -255,6 +242,11 @@ def build_data_bundle(config: TrainingConfig) -> DataBundle:
         transform=build_train_transform(config.image_size),
         positive_class=config.positive_class,
     )
+    train_eval_dataset = BinaryImageFolder(
+        split_dirs["train"],
+        transform=build_eval_transform(config.image_size),
+        positive_class=train_dataset.positive_class,
+    )
     val_dataset = BinaryImageFolder(
         split_dirs["val"],
         transform=build_eval_transform(config.image_size),
@@ -266,7 +258,7 @@ def build_data_bundle(config: TrainingConfig) -> DataBundle:
         positive_class=config.positive_class,
     )
 
-    for split_name, dataset in (("val", val_dataset), ("test", test_dataset)):
+    for split_name, dataset in (("train_eval", train_eval_dataset), ("val", val_dataset), ("test", test_dataset)):
         _validate_binary_semantics(train_dataset, dataset, split_name)
         if _class_family(train_dataset.positive_class) and _class_family(dataset.positive_class):
             if _class_family(train_dataset.positive_class) != _class_family(dataset.positive_class):
@@ -279,11 +271,13 @@ def build_data_bundle(config: TrainingConfig) -> DataBundle:
     }
     generator = torch.Generator().manual_seed(config.seed)
     train_loader = _build_loader(train_dataset, config, shuffle=True, generator=generator)
+    train_eval_loader = _build_loader(train_eval_dataset, config, shuffle=False, generator=None)
     val_loader = _build_loader(val_dataset, config, shuffle=False, generator=None)
     test_loader = _build_loader(test_dataset, config, shuffle=False, generator=None)
 
     return DataBundle(
         train_loader=train_loader,
+        train_eval_loader=train_eval_loader,
         val_loader=val_loader,
         test_loader=test_loader,
         negative_class=train_dataset.negative_class,
