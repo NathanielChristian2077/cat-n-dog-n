@@ -15,11 +15,12 @@ import numpy as np
 import torch
 
 
-def set_global_seed(seed: int) -> None:
-    """Seed Python, NumPy and PyTorch as far as practical.
+def set_global_seed(seed: int, *, deterministic: bool, enable_tf32: bool) -> None:
+    """Seed RNGs and configure the CUDA execution policy explicitly.
 
-    Determinism can reduce throughput on CUDA. Here reproducibility matters more
-    than squeezing an extra fraction of a second out of a class assignment.
+    Deterministic kernels and maximum throughput are competing objectives. The
+    default project profile favours a fast local CUDA run; ``--deterministic``
+    is retained for a controlled rerun rather than penalising every experiment.
     """
 
     random.seed(seed)
@@ -27,16 +28,38 @@ def set_global_seed(seed: int) -> None:
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
+
+    torch.backends.cudnn.deterministic = deterministic
+    torch.backends.cudnn.benchmark = not deterministic
+
+    if torch.cuda.is_available():
+        # RTX-class GPUs benefit from TF32 for float32 matrix/convolution paths.
+        # AMP remains the main acceleration path; TF32 is a safe fast fallback.
+        torch.backends.cuda.matmul.allow_tf32 = enable_tf32 and not deterministic
+        torch.backends.cudnn.allow_tf32 = enable_tf32 and not deterministic
+        if hasattr(torch, "set_float32_matmul_precision"):
+            torch.set_float32_matmul_precision("high" if enable_tf32 and not deterministic else "highest")
 
 
-def seed_worker(worker_id: int) -> None:
-    """Seed DataLoader workers from PyTorch's worker-specific initial seed."""
+def resolve_num_workers(requested: int | str, device: torch.device) -> int:
+    """Choose a conservative loader-worker count for the available host CPU.
 
-    worker_seed = torch.initial_seed() % (2**32)
-    random.seed(worker_seed)
-    np.random.seed(worker_seed)
+    More workers are not automatically faster. Eight workers keep image decode
+    and augmentation ahead of a single local GPU without turning WSL/desktop
+    scheduling into a small civil war.
+    """
+
+    if isinstance(requested, int):
+        if requested < 0:
+            raise ValueError("num_workers precisa ser não negativo.")
+        return requested
+    if requested != "auto":
+        raise ValueError("num_workers precisa ser um inteiro não negativo ou 'auto'.")
+
+    logical_cpus = os.cpu_count() or 2
+    if device.type == "cuda":
+        return min(8, max(2, logical_cpus - 2))
+    return min(4, max(0, logical_cpus - 1))
 
 
 def resolve_device(requested: str) -> torch.device:
@@ -72,17 +95,27 @@ def runtime_snapshot(device: torch.device) -> dict[str, Any]:
         "timestamp_utc": utc_now(),
         "python": platform.python_version(),
         "platform": platform.platform(),
+        "logical_cpu_count": os.cpu_count(),
         "pytorch": torch.__version__,
         "torch_cuda_build": torch.version.cuda,
         "device": str(device),
         "cuda_available": torch.cuda.is_available(),
+        "cudnn_benchmark": torch.backends.cudnn.benchmark,
+        "cudnn_deterministic": torch.backends.cudnn.deterministic,
     }
     if device.type == "cuda":
         index = device.index if device.index is not None else torch.cuda.current_device()
         properties = torch.cuda.get_device_properties(index)
-        snapshot["gpu_name"] = properties.name
-        snapshot["gpu_memory_gb"] = round(properties.total_memory / (1024**3), 2)
-        snapshot["cudnn_version"] = torch.backends.cudnn.version()
+        snapshot.update(
+            {
+                "gpu_name": properties.name,
+                "gpu_memory_gb": round(properties.total_memory / (1024**3), 2),
+                "gpu_compute_capability": f"{properties.major}.{properties.minor}",
+                "cudnn_version": torch.backends.cudnn.version(),
+                "tf32_matmul": torch.backends.cuda.matmul.allow_tf32,
+                "tf32_cudnn": torch.backends.cudnn.allow_tf32,
+            }
+        )
     return snapshot
 
 
