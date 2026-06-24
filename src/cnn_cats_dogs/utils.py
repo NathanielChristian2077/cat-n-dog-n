@@ -41,6 +41,20 @@ def set_global_seed(seed: int, *, deterministic: bool, enable_tf32: bool) -> Non
             torch.set_float32_matmul_precision("high" if enable_tf32 and not deterministic else "highest")
 
 
+def seed_worker(worker_id: int) -> None:
+    """Seed Python and NumPy inside each DataLoader worker.
+
+    PyTorch derives a distinct worker seed from the generator passed to the
+    loader. Keeping this helper local makes randomized image augmentations
+    reproducible when a controlled run is requested.
+    """
+
+    del worker_id
+    worker_seed = torch.initial_seed() % (2**32)
+    random.seed(worker_seed)
+    np.random.seed(worker_seed)
+
+
 def resolve_num_workers(requested: int | str, device: torch.device) -> int:
     """Choose a conservative loader-worker count for the available host CPU.
 
