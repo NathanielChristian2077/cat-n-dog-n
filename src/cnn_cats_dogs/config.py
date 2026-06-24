@@ -19,7 +19,7 @@ class TrainingConfig:
     data_dir: Path
     output_dir: Path
     image_size: int = 224
-    batch_size: int = 128
+    batch_size: int = 32
     epochs: int = 25
     learning_rate: float = 1e-3
     weight_decay: float = 1e-4
@@ -32,6 +32,7 @@ class TrainingConfig:
     deterministic: bool = False
     enable_tf32: bool = True
     channels_last: bool = True
+    balance_positive_class: bool = True
     early_stopping_patience: int = 8
     scheduler_patience: int = 2
     scheduler_factor: float = 0.5
