@@ -1,139 +1,187 @@
 # cat-n-dog-n
 
-Implementação de uma CNN **criada do zero** com PyTorch e TorchVision para classificação binária de imagens de gatos e cães. Este repositório é o fallback individual da Etapa 2: ele não importa arquiteturas prontas nem pesos pré-treinados. Framework, sim; muleta arquitetural, não.
+Projeto de classificação binária de gatos e cães para as etapas de redes neurais do trabalho de IA. O repositório concentra a **CNN implementada do zero** da Etapa 2 e o **transfer learning com pesos ImageNet oficiais** da Etapa 3. A MLP manual da Etapa 1 é tratada como baseline conceitual e como origem dos presets de head comparados na CNN.
 
-## Conformidade com a Etapa 2
+## Escopo e conformidade
 
-| Exigência | Implementação |
-|---|---|
-| CNN com PyTorch e TorchVision | `torch`, `torchvision` e loaders TorchVision |
-| Nenhuma arquitetura pronta / nenhum modelo pré-treinado | `ScratchCNN`, declarada camada a camada em `src/cnn_cats_dogs/model.py` |
-| Pelo menos duas convoluções | seis `Conv2d` |
-| Pelo menos uma pooling | três `MaxPool2d` |
-| Pelo menos uma camada totalmente conectada | `Linear(128, 128)` e `Linear(128, 1)` |
-| RGB 3 × 224 × 224 | transforms de treino/validação/teste em `data.py` |
-| Três técnicas de data augmentation em grupos distintos | crop/scale, flip, color jitter e random erasing |
-| Métricas | loss, accuracy, precision, recall, F1, matriz de confusão, curvas, tempo e pico de VRAM |
+| Etapa | Implementação | Regra central atendida |
+|---|---|---|
+| 1 | MLP manual, executada separadamente | sem biblioteca de rede neural pronta |
+| 2 | `ScratchCNN` declarada camada a camada | sem arquitetura pronta e sem pesos pré-treinados |
+| 3 | ResNet18, EfficientNet-B0 e ConvNeXt-Tiny | pesos oficiais TorchVision adaptados por fine-tuning |
 
-## Dataset: sem reorganização manual
+A CNN da Etapa 2 recebe RGB `3×224×224`, contém seis convoluções, três `MaxPool2d`, normalização em lote, ReLU e um classificador denso configurável. O treinamento usa quatro famílias de augmentation: crop/escala, reflexão horizontal, perturbação fotométrica e oclusão leve.
 
-Use **exatamente** a divisão entregue pelo professor. O projeto não cria split aleatório, porque mudar a divisão no meio do trabalho seria uma forma bastante criativa de destruir a comparação.
+A Etapa 3 mantém o mesmo dataset, as mesmas métricas e o mesmo protocolo de seleção, trocando somente a origem da representação visual por pesos ImageNet oficiais. Cada backbone usa dois logits e `CrossEntropyLoss`; a Softmax é aplicada apenas para converter logits em probabilidades durante as métricas.
 
-O loader aceita estas variações sem copiar, renomear ou criar links simbólicos:
+## Estrutura do repositório
+
+```text
+src/cnn_cats_dogs/
+├── data.py                 # dataset da Etapa 2 e validação rígida dos splits
+├── model.py                # CNN construída do zero
+├── engine.py               # treino e avaliação da Etapa 2
+├── transfer_models.py      # factory ResNet18, EfficientNet-B0 e ConvNeXt-Tiny
+├── transfer_data.py        # transforms específicos dos pesos ImageNet
+├── transfer_engine.py      # head adaptation + fine-tuning parcial
+├── dataset_audit.py        # auditoria de duplicatas entre splits
+├── metrics.py              # accuracy, precision, recall, F1 e matriz de confusão
+└── visualization.py        # curvas e matriz de confusão
+
+scripts/
+├── train.py                # compatibilidade: treino básico da CNN do zero
+├── train_scratch.py        # treino configurável da Etapa 2
+├── compare_phase1_heads.py # ablação dos heads derivados da Etapa 1
+├── evaluate.py             # reavaliação de checkpoint da Etapa 2
+├── train_transfer.py       # treino individual da Etapa 3
+├── compare_transfer.py     # comparação dos três backbones por validação
+├── evaluate_transfer.py    # teste final de checkpoint transfer learning
+└── audit_dataset.py        # auditoria de integridade do dataset
+
+docs/
+├── phase1_cnn_comparison.md
+├── part3_handoff.md
+├── final_results.md
+└── runs_to_keep.md
+
+notebooks/
+├── etapa2_cnn_pytorch.ipynb
+└── etapa3_transfer_learning.ipynb
+```
+
+## Contrato do dataset
+
+Use a divisão entregue pelo professor. O projeto **não cria nem reorganiza** split aleatório.
 
 ```text
 dataset/
-├── train/ | training/ | treino/
-├── val/   | validation/ | validacao/
-└── test/  | testing/ | teste/
+├── train/{cats,dogs}/
+├── val/{cats,dogs}/
+└── test/{cats,dogs}/
 ```
 
-Cada split deve conter as duas pastas de classe. Os nomes podem ser `cats/dogs`, `gatos/cachorros` ou equivalentes, inclusive quando o conjunto do professor vem dentro de **um** diretório pai adicional:
+Também são aceitas variações em português, como `treino/validacao/teste` e `gatos/cachorros`, inclusive quando os três splits estiverem dentro de um diretório pai adicional. A classe positiva é explícita e normalmente definida como `dogs`.
 
-```text
-dataset/
-└── cats_dogs_professor/
-    ├── treino/
-    │   ├── Gatos/
-    │   └── Cachorros/
-    ├── validacao/
-    │   ├── Gatos/
-    │   └── Cachorros/
-    └── teste/
-        ├── Gatos/
-        └── Cachorros/
+Antes de interpretar resultados muito altos, audite o dataset:
+
+```bash
+python3 scripts/audit_dataset.py \
+  --data-dir dataset \
+  --output-dir runs/dataset_audit \
+  --dhash-threshold 4
 ```
 
-A classe positiva continua explícita. `--positive-class dogs` também reconhece `cachorros`; use o nome de uma pasta caso o dataset tenha rótulos fora desse par.
+Duplicata exata entre splits é evidência de vazamento. Candidatos de similaridade perceptual por dHash precisam de inspeção visual, pois são apenas alertas.
 
-No início de cada treino, o programa mostra as contagens negativa/positiva de `train`, `val` e `test`. O treino aplica `pos_weight = negativos / positivos` na BCE para compensar uma divisão de treino desbalanceada, mas validação e teste continuam com BCE comum. Isso não muda os arquivos nem os splits do professor, só impede que a rede ganhe pontos fingindo que toda imagem é a classe majoritária.
+## Instalação
 
-## Setup local com CUDA
-
-Use Python 3.10 ou superior. Primeiro instale um par `torch`/`torchvision` com CUDA compatível com o driver NVIDIA do sistema pelo seletor oficial do PyTorch. Depois instale o projeto no ambiente virtual:
+Use Python 3.10 ou superior. Instale uma versão de `torch` e `torchvision` compatível com o driver NVIDIA e a CUDA do ambiente. Depois:
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
-
-# Exemplo CUDA 12.6. Troque pelo comando do seletor oficial se o driver pedir outra variante.
-python -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126
 python -m pip install -e '.[notebook,dev]'
-```
 
-Verificação obrigatória, porque uma GPU ignorada é só um aquecedor caro:
-
-```bash
-python -c "import torch; print(torch.__version__, torch.cuda.is_available(), torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'sem CUDA')"
-```
-
-## Treino rápido local
-
-Coloque o dataset dentro de `dataset/` e rode da raiz do repositório:
-
-```bash
-python scripts/train.py \
-  --data-dir dataset \
-  --output-dir runs/cnn_scratch_balanced \
-  --positive-class dogs \
-  --epochs 40 \
-  --batch-size 32 \
-  --learning-rate 3e-4 \
-  --num-workers 8 \
-  --device cuda
-```
-
-`batch-size 32` é o ponto de partida deliberado para datasets acadêmicos pequenos: ele dá mais atualizações por época. Uma RTX com memória sobrando não exige batch 128; isso só deixa a GPU entediada enquanto o otimizador recebe dois ou três gradientes e começa a inventar uma personalidade.
-
-O perfil CUDA já usa AMP FP16, TF32 quando disponível, cuDNN autotuning, `channels_last`, AdamW fundido quando o build suporta, `pin_memory`, workers persistentes e prefetch. A execução padrão privilegia throughput; para uma repetição estritamente determinística, use a `TrainingConfig(deterministic=True)` no notebook ou no código Python.
-
-Se houver erro de memória, reduza apenas o batch: `32 → 16`. Não mexa no tamanho 224×224, que é requisito da etapa.
-
-## Saídas salvas
-
-Após o treino, `runs/cnn_scratch_balanced/` conterá:
-
-```text
-artifacts/
-  experiment_config.json   # hiperparâmetros, layout resolvido, distribuição de classes, ambiente e arquitetura
-  history.csv              # métricas por época, tempo e pico de VRAM
-  run_summary.json         # melhor época, tempo e resultado de teste
-  test_predictions.csv     # probabilidades e predições do teste
-checkpoints/
-  best_val_loss.pt
-  last.pt
-plots/
-  learning_curves.png
-  confusion_matrix_test.png
-```
-
-O melhor checkpoint é escolhido exclusivamente por **loss de validação**. O conjunto de teste é consultado uma vez no fim, como manda o bom senso estatístico, esse animal raramente visto.
-
-## Reavaliação
-
-```bash
-python scripts/evaluate.py \
-  --checkpoint runs/cnn_scratch_balanced/checkpoints/best_val_loss.pt \
-  --data-dir dataset \
-  --output-dir runs/re_evaluation \
-  --batch-size 32 \
-  --num-workers 8 \
-  --device cuda
-```
-
-## Notebook de entrega
-
-Abra `notebooks/etapa2_cnn_pytorch.ipynb` a partir da raiz do repositório. Ele usa os mesmos módulos do código de produção, mostra as transformações, apresenta a arquitetura, dispara o treino e carrega os gráficos/resultados para a entrega. O notebook não replica 400 linhas de código por sadismo pedagógico.
-
-## Testes rápidos
-
-```bash
+python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
 pytest
 ```
 
-Os testes verificam o contrato RGB `3 × 224 × 224`, a saída binária e a descoberta/validação da estrutura de dataset.
+Os scripts em `scripts/` inserem `src/` no `sys.path`; portanto, também funcionam sem instalação editável. A instalação editável continua recomendada para notebooks, testes e uso dos módulos com `python -m`.
 
-## Preparação para a Etapa 3
+## Etapa 2: CNN do zero
 
-A infraestrutura foi organizada para reaproveitar loaders, métricas, gráficos e checkpoints no transfer learning. O plano está em [`docs/part3_handoff.md`](docs/part3_handoff.md).
+O treino final de referência da CNN manual pode ser reproduzido com o preset baseline:
+
+```bash
+python3 scripts/train_scratch.py \
+  --data-dir dataset \
+  --output-dir runs/cnn_scratch_reproduction \
+  --architecture cnn_baseline_128_sigmoid1 \
+  --positive-class dogs \
+  --epochs 40 \
+  --batch-size 32 \
+  --learning-rate 1e-3 \
+  --num-workers 8 \
+  --device cuda
+```
+
+A ablação que transfere as topologias densas mais fortes da MLP para um backbone convolucional fixo está descrita em [`docs/phase1_cnn_comparison.md`](docs/phase1_cnn_comparison.md):
+
+```bash
+python3 scripts/compare_phase1_heads.py \
+  --data-dir dataset \
+  --output-dir runs/phase1_head_comparison \
+  --seeds 42 73 101 \
+  --epochs 40 \
+  --batch-size 32 \
+  --learning-rate 1e-3 \
+  --num-workers 8 \
+  --device cuda
+```
+
+## Etapa 3: transfer learning
+
+A comparação dos backbones é feita sem consultar o teste durante a seleção:
+
+```bash
+python3 scripts/compare_transfer.py \
+  --data-dir dataset \
+  --output-dir runs/transfer_comparison \
+  --seeds 42 73 101 \
+  --head-epochs 12 \
+  --finetune-epochs 20 \
+  --batch-size 32 \
+  --num-workers 8 \
+  --device cuda
+```
+
+O protocolo possui duas fases:
+
+1. **Adaptação da cabeça:** backbone congelado e treino apenas do classificador binário novo.
+2. **Fine-tuning parcial:** recarrega o melhor checkpoint da fase anterior, libera o último estágio visual e reduz o learning rate.
+
+A escolha é feita pela menor loss de validação. Só depois se executa o teste final do checkpoint escolhido:
+
+```bash
+python3 scripts/evaluate_transfer.py \
+  --checkpoint runs/transfer_comparison/convnext_tiny/seed_101/checkpoints/best_val_loss.pt \
+  --data-dir dataset \
+  --output-dir runs/transfer_final_test/convnext_tiny/seed_101 \
+  --batch-size 32 \
+  --num-workers 8 \
+  --device cuda
+```
+
+## Resultados consolidados
+
+A CNN do zero alcançou `66,0%` de acurácia e `68,5%` de F1 no teste, evidenciando a limitação de aprender uma representação visual a partir de apenas 300 imagens de treino.
+
+No transfer learning, a seleção por validação favoreceu ConvNeXt-Tiny. No teste final, porém, ResNet18 e EfficientNet-B0 apresentaram desempenho médio ligeiramente superior ou equivalente com menor custo computacional. O detalhamento, a interpretação correta das seeds e a tabela pronta para o relatório estão em [`docs/final_results.md`](docs/final_results.md).
+
+## Artefatos produzidos
+
+Cada execução salva, em seu diretório de `runs/`:
+
+```text
+artifacts/
+├── experiment_config.json
+├── history.csv
+├── run_summary.json
+└── test_predictions.csv
+checkpoints/
+├── best_val_loss.pt
+└── last.pt
+plots/
+├── learning_curves.png
+└── confusion_matrix_test.png
+```
+
+Checkpoints podem ser grandes; o guia [`docs/runs_to_keep.md`](docs/runs_to_keep.md) indica quais artefatos manter no repositório e quais podem ser descartados após a avaliação final.
+
+## Notebooks de entrega
+
+- [`notebooks/etapa2_cnn_pytorch.ipynb`](notebooks/etapa2_cnn_pytorch.ipynb): CNN manual, dados, arquitetura, treino e leitura dos artefatos finais da Etapa 2.
+- [`notebooks/etapa3_transfer_learning.ipynb`](notebooks/etapa3_transfer_learning.ipynb): auditoria, modelos pré-treinados, protocolo em duas fases, comparação de validação, teste final e análise de trade-offs.
+
+Os notebooks usam os mesmos módulos de produção. Eles existem para explicar e reproduzir o experimento, não para duplicar centenas de linhas de lógica de treino.
