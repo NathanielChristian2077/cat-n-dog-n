@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cnn-cats-dogs"
+version = "0.1.0"
+description = "Scratch CNN for the IFSC cats-versus-dogs assignment."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "torch>=2.2",
+  "torchvision>=0.17",
+  "numpy>=1.26",
+  "pandas>=2.1",
+  "matplotlib>=3.8",
+  "scikit-learn>=1.4",
+  "Pillow>=10.0",
+]
+
+[project.optional-dependencies]
+notebook = [
+  "jupyterlab>=4.0",
+  "ipykernel>=6.0",
+]
+dev = [
+  "pytest>=8.0",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "-ra"
