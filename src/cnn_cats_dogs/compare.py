@@ -142,4 +142,5 @@ def main(argv: list[str] | None = None) -> None:
     print(f"Resumo agregado, ordenado por validação: {args.output_dir / 'comparison_summary.csv'}")
 
 
-if __name__ == "__main__":n    main()
+if __name__ == "__main__":
+    main()
