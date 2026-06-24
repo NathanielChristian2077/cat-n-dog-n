@@ -23,7 +23,7 @@ def plot_learning_curves(history: pd.DataFrame, output_path: Path) -> None:
     axes[0].plot(history["epoch"], history["val_loss"], label="Validação")
     axes[0].set_title("Loss por época")
     axes[0].set_xlabel("Época")
-    axes[0].set_ylabel("Binary Cross-Entropy")
+    axes[0].set_ylabel("Loss")
     axes[0].legend()
     axes[0].grid(alpha=0.25)
 
