@@ -1,7 +1,9 @@
-"""Dataset validation, augmentation, and DataLoader construction."""
+"""Dataset discovery, augmentation, and DataLoader construction."""
 
 from __future__ import annotations
 
+import re
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -18,6 +20,39 @@ from .utils import seed_worker
 RGB_MEAN = (0.5, 0.5, 0.5)
 RGB_STD = (0.5, 0.5, 0.5)
 SPLITS = ("train", "val", "test")
+SPLIT_ALIASES = {
+    "train": {"train", "training", "treino", "treinamento", "training_set", "treino_set"},
+    "val": {"val", "valid", "validation", "validacao", "validacao_set", "validation_set", "dev"},
+    "test": {"test", "testing", "teste", "test_set", "testing_set", "teste_set"},
+}
+CLASS_ALIASES = {
+    "dog": {"dog", "dogs", "cachorro", "cachorros"},
+    "cat": {"cat", "cats", "gato", "gatos"},
+}
+
+
+def _normalise_name(value: str) -> str:
+    """Normalise harmless naming differences without changing the data itself."""
+
+    decomposed = unicodedata.normalize("NFKD", value.casefold())
+    without_accents = "".join(char for char in decomposed if not unicodedata.combining(char))
+    return re.sub(r"[^a-z0-9]+", "_", without_accents).strip("_")
+
+
+def _canonical_split(name: str) -> str | None:
+    normalized = _normalise_name(name)
+    for canonical, aliases in SPLIT_ALIASES.items():
+        if normalized in aliases:
+            return canonical
+    return None
+
+
+def _class_family(name: str) -> str | None:
+    normalized = _normalise_name(name)
+    for family, aliases in CLASS_ALIASES.items():
+        if normalized in aliases:
+            return family
+    return None
 
 
 class BinaryImageFolder(datasets.ImageFolder):
@@ -51,24 +86,77 @@ class BinaryImageFolder(datasets.ImageFolder):
 
 
 def _resolve_class_name(classes: list[str], requested: str) -> str:
-    exact = {name.casefold(): name for name in classes}
-    key = requested.casefold().strip()
+    exact = {_normalise_name(name): name for name in classes}
+    key = _normalise_name(requested)
     if key in exact:
         return exact[key]
 
-    aliases = {
-        "dog": {"dog", "dogs", "cachorro", "cachorros"},
-        "cat": {"cat", "cats", "gato", "gatos"},
-    }
-    for alias_group in aliases.values():
-        if key in alias_group:
-            matches = [name for name in classes if name.casefold() in alias_group]
-            if len(matches) == 1:
-                return matches[0]
+    requested_family = _class_family(requested)
+    if requested_family is not None:
+        matches = [name for name in classes if _class_family(name) == requested_family]
+        if len(matches) == 1:
+            return matches[0]
 
     raise ValueError(
         f"positive_class={requested!r} não corresponde às classes encontradas: {classes}. "
-        "Passe exatamente o nome da pasta positiva com --positive-class."
+        "Passe o nome da pasta positiva ou um alias reconhecido, como dogs/cachorros."
+    )
+
+
+def _resolve_split_dirs(data_dir: Path) -> tuple[Path, dict[str, Path]]:
+    """Locate a professor-provided split-first layout without moving any files.
+
+    Accepted examples include ``train/val/test``, ``treino/validacao/teste`` and
+    a single enclosing directory such as ``dataset/cats_dogs/{train,val,test}``.
+    The assignment's division remains untouched; only names are normalised.
+    """
+
+    if not data_dir.is_dir():
+        raise FileNotFoundError(f"Dataset não encontrado: {data_dir}")
+
+    candidate_roots = [data_dir]
+    candidate_roots.extend(sorted(path for path in data_dir.iterdir() if path.is_dir()))
+
+    partial_layouts: list[tuple[Path, dict[str, Path]]] = []
+    for root in candidate_roots:
+        resolved: dict[str, Path] = {}
+        for child in sorted(path for path in root.iterdir() if path.is_dir()):
+            canonical = _canonical_split(child.name)
+            if canonical is None:
+                continue
+            if canonical in resolved:
+                raise ValueError(
+                    f"Foram encontradas duas pastas para o split {canonical!r} em {root}: "
+                    f"{resolved[canonical].name!r} e {child.name!r}. Remova a ambiguidade."
+                )
+            resolved[canonical] = child
+        if set(resolved) == set(SPLITS):
+            return root, resolved
+        if resolved:
+            partial_layouts.append((root, resolved))
+
+    found = "; ".join(
+        f"{root}: {', '.join(sorted(layout))}" for root, layout in partial_layouts
+    ) or "nenhum split reconhecido"
+    aliases = "train/val/test, training/validation/testing ou treino/validacao/teste"
+    raise FileNotFoundError(
+        f"Não foi possível localizar os três splits em {data_dir}. Encontrado: {found}. "
+        f"Use uma estrutura split-first com nomes equivalentes a {aliases}."
+    )
+
+
+def _validate_binary_semantics(train_dataset: BinaryImageFolder, other: BinaryImageFolder, split: str) -> None:
+    """Accept translated class names, but reject a genuinely different taxonomy."""
+
+    if set(train_dataset.classes) == set(other.classes):
+        return
+    train_families = {_class_family(name) for name in train_dataset.classes}
+    other_families = {_class_family(name) for name in other.classes}
+    if train_families == {"cat", "dog"} and other_families == {"cat", "dog"}:
+        return
+    raise ValueError(
+        f"Classes de {split}={other.classes} diferem da taxonomia de treino={train_dataset.classes}. "
+        "Os três splits precisam representar as mesmas duas classes."
     )
 
 
@@ -120,17 +208,8 @@ class DataBundle:
     positive_class: str
     class_names: tuple[str, str]
     sizes: dict[str, int]
-
-
-def _validate_split_layout(data_dir: Path) -> None:
-    missing = [split for split in SPLITS if not (data_dir / split).is_dir()]
-    if missing:
-        expected = "\n".join(f"  {data_dir / split}/<classe>/imagem.jpg" for split in SPLITS)
-        raise FileNotFoundError(
-            "Divisões ausentes: "
-            f"{missing}. A Etapa 2 deve usar a divisão fornecida pelo professor, sem criar uma "
-            f"divisão nova. Estrutura esperada:\n{expected}"
-        )
+    dataset_root: Path
+    split_dirs: dict[str, Path]
 
 
 def _build_loader(
@@ -151,38 +230,35 @@ def _build_loader(
     }
     if config.num_workers > 0:
         kwargs["persistent_workers"] = True
+        kwargs["prefetch_factor"] = config.prefetch_factor
     return DataLoader(**kwargs)
 
 
 def build_data_bundle(config: TrainingConfig) -> DataBundle:
-    """Load professor-provided train/val/test folders with strict consistency checks."""
+    """Load the professor-provided splits with strict, name-tolerant validation."""
 
-    _validate_split_layout(config.data_dir)
+    dataset_root, split_dirs = _resolve_split_dirs(config.data_dir)
     train_dataset = BinaryImageFolder(
-        config.data_dir / "train",
+        split_dirs["train"],
         transform=build_train_transform(config.image_size),
         positive_class=config.positive_class,
     )
     val_dataset = BinaryImageFolder(
-        config.data_dir / "val",
+        split_dirs["val"],
         transform=build_eval_transform(config.image_size),
-        positive_class=train_dataset.positive_class,
+        positive_class=config.positive_class,
     )
     test_dataset = BinaryImageFolder(
-        config.data_dir / "test",
+        split_dirs["test"],
         transform=build_eval_transform(config.image_size),
-        positive_class=train_dataset.positive_class,
+        positive_class=config.positive_class,
     )
 
-    expected_classes = set(train_dataset.classes)
     for split_name, dataset in (("val", val_dataset), ("test", test_dataset)):
-        if set(dataset.classes) != expected_classes:
-            raise ValueError(
-                f"Classes de {split_name}={dataset.classes} diferem do treino={train_dataset.classes}. "
-                "A mesma taxonomia precisa existir nas três divisões."
-            )
-        if dataset.positive_class != train_dataset.positive_class:
-            raise ValueError("A classe positiva mudou entre os splits, o que não deveria ser possível.")
+        _validate_binary_semantics(train_dataset, dataset, split_name)
+        if _class_family(train_dataset.positive_class) and _class_family(dataset.positive_class):
+            if _class_family(train_dataset.positive_class) != _class_family(dataset.positive_class):
+                raise ValueError("A classe positiva mudou entre os splits, o que não deveria ser possível.")
 
     generator = torch.Generator().manual_seed(config.seed)
     train_loader = _build_loader(train_dataset, config, shuffle=True, generator=generator)
@@ -197,4 +273,6 @@ def build_data_bundle(config: TrainingConfig) -> DataBundle:
         positive_class=train_dataset.positive_class,
         class_names=(train_dataset.negative_class, train_dataset.positive_class),
         sizes={"train": len(train_dataset), "val": len(val_dataset), "test": len(test_dataset)},
+        dataset_root=dataset_root,
+        split_dirs=split_dirs,
     )
