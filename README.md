@@ -1,75 +1,89 @@
 # cat-n-dog-n
 
-Implementação de uma CNN **criada do zero** com PyTorch e TorchVision para classificação
-binária de imagens de gatos e cães. Este repositório é o fallback individual da Etapa 2: ele
-não importa arquiteturas prontas nem pesos pré-treinados. Framework, sim; muleta arquitetural,
-não. A humanidade sobreviveu.
+Implementação de uma CNN **criada do zero** com PyTorch e TorchVision para classificação binária de imagens de gatos e cães. Este repositório é o fallback individual da Etapa 2: ele não importa arquiteturas prontas nem pesos pré-treinados. Framework, sim; muleta arquitetural, não.
 
 ## Conformidade com a Etapa 2
 
 | Exigência | Implementação |
 |---|---|
-| CNN com PyTorch e TorchVision | `torch`, `torchvision` e `ImageFolder` |
+| CNN com PyTorch e TorchVision | `torch`, `torchvision` e loaders TorchVision |
 | Nenhuma arquitetura pronta / nenhum modelo pré-treinado | `ScratchCNN`, declarada camada a camada em `src/cnn_cats_dogs/model.py` |
 | Pelo menos duas convoluções | seis `Conv2d` |
 | Pelo menos uma pooling | três `MaxPool2d` |
 | Pelo menos uma camada totalmente conectada | `Linear(128, 128)` e `Linear(128, 1)` |
 | RGB 3 × 224 × 224 | transforms de treino/validação/teste em `data.py` |
 | Três técnicas de data augmentation em grupos distintos | crop/scale, flip, color jitter e random erasing |
-| Métricas | loss, accuracy, precision, recall, F1, matriz de confusão, curvas e tempo |
+| Métricas | loss, accuracy, precision, recall, F1, matriz de confusão, curvas, tempo e pico de VRAM |
 
-## Estrutura esperada do dataset
+## Dataset: sem reorganização manual
 
-Use **exatamente** a divisão entregue pelo professor. O código não faz split aleatório, porque
-mudar a divisão no meio do trabalho seria uma forma bastante criativa de destruir a comparação.
+Use **exatamente** a divisão entregue pelo professor. O projeto não cria split aleatório, porque mudar a divisão no meio do trabalho seria uma forma bastante criativa de destruir a comparação.
+
+O loader aceita estas variações sem copiar, renomear ou criar links simbólicos:
 
 ```text
-data/
-├── train/
-│   ├── cats/
-│   └── dogs/
-├── val/
-│   ├── cats/
-│   └── dogs/
-└── test/
-    ├── cats/
-    └── dogs/
+dataset/
+├── train/ | training/ | treino/
+├── val/   | validation/ | validacao/
+└── test/  | testing/ | teste/
 ```
 
-Os nomes podem ser `gatos/cachorros` ou outro par, desde que sejam iguais nos três splits. Use
-`--positive-class` para definir qual pasta é a classe `1`.
+Cada split deve conter as duas pastas de classe. Os nomes podem ser `cats/dogs`, `gatos/cachorros` ou equivalentes, inclusive quando o conjunto do professor vem dentro de **um** diretório pai adicional:
 
-## Instalação
+```text
+dataset/
+└── cats_dogs_professor/
+    ├── treino/
+    │   ├── Gatos/
+    │   └── Cachorros/
+    ├── validacao/
+    │   ├── Gatos/
+    │   └── Cachorros/
+    └── teste/
+        ├── Gatos/
+        └── Cachorros/
+```
 
-Crie um ambiente virtual e instale as dependências. Em Google Colab, PyTorch já vem instalado.
-Para GPU local, instale um par PyTorch/TorchVision compatível com seu driver/CUDA antes de
-instalar o restante.
+A classe positiva continua explícita. `--positive-class dogs` também reconhece `cachorros`; use o nome de uma pasta caso o dataset tenha rótulos fora desse par.
+
+## Setup local com CUDA
+
+Use Python 3.10 ou superior. Primeiro instale um par `torch`/`torchvision` com CUDA compatível com o driver NVIDIA do sistema pelo seletor oficial do PyTorch. Depois instale o projeto no ambiente virtual:
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate        # Linux/macOS
-# .venv\\Scripts\\Activate.ps1   # Windows PowerShell
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
 
-pip install --upgrade pip
-pip install -e '.[notebook,dev]'
+# Exemplo CUDA 12.6. Troque pelo comando do seletor oficial se o driver pedir outra variante.
+python -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126
+python -m pip install -e '.[notebook,dev]'
 ```
 
-## Treino
+Verificação obrigatória, porque uma GPU ignorada é só um aquecedor caro:
+
+```bash
+python -c "import torch; print(torch.__version__, torch.cuda.is_available(), torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'sem CUDA')"
+```
+
+## Treino rápido local
+
+Coloque o dataset dentro de `dataset/` e rode da raiz do repositório:
 
 ```bash
 python scripts/train.py \
-  --data-dir data \
+  --data-dir dataset \
   --output-dir runs/cnn_scratch \
   --positive-class dogs \
   --epochs 25 \
-  --batch-size 32 \
-  --num-workers 2 \
-  --device auto
+  --batch-size 128 \
+  --num-workers 8 \
+  --device cuda
 ```
 
-Em Windows puro, comece com `--num-workers 0`. Em Colab/Linux, `2` ou `4` normalmente é um
-ponto de partida aceitável. Ajuste o `batch-size` de acordo com a memória da GPU, pois VRAM
-continua sendo uma entidade maldosa que não negocia.
+O perfil CUDA já usa AMP FP16, TF32 quando disponível, cuDNN autotuning, `channels_last`, AdamW fundido quando o build suporta, `pin_memory`, workers persistentes e prefetch. A execução padrão privilegia throughput; para uma repetição estritamente determinística, use a `TrainingConfig(deterministic=True)` no notebook ou no código Python.
+
+Se houver erro de memória, reduza apenas o batch: `128 → 96 → 64`. Não mexa no tamanho 224×224, que é requisito da etapa.
 
 ## Saídas salvas
 
@@ -77,8 +91,8 @@ Após o treino, `runs/cnn_scratch/` conterá:
 
 ```text
 artifacts/
-  experiment_config.json   # hiperparâmetros, ambiente e arquitetura
-  history.csv              # métricas por época
+  experiment_config.json   # hiperparâmetros, layout resolvido, ambiente e arquitetura
+  history.csv              # métricas por época, tempo e pico de VRAM
   run_summary.json         # melhor época, tempo e resultado de teste
   test_predictions.csv     # probabilidades e predições do teste
 checkpoints/
@@ -89,24 +103,23 @@ plots/
   confusion_matrix_test.png
 ```
 
-O melhor checkpoint é escolhido exclusivamente por **loss de validação**. O conjunto de teste
-é consultado uma vez no fim, como manda o bom senso estatístico, esse animal raramente visto.
+O melhor checkpoint é escolhido exclusivamente por **loss de validação**. O conjunto de teste é consultado uma vez no fim, como manda o bom senso estatístico, esse animal raramente visto.
 
 ## Reavaliação
 
 ```bash
 python scripts/evaluate.py \
   --checkpoint runs/cnn_scratch/checkpoints/best_val_loss.pt \
-  --data-dir data \
-  --output-dir runs/re_evaluation
+  --data-dir dataset \
+  --output-dir runs/re_evaluation \
+  --batch-size 128 \
+  --num-workers 8 \
+  --device cuda
 ```
 
 ## Notebook de entrega
 
-Abra `notebooks/etapa2_cnn_pytorch.ipynb` a partir da raiz do repositório. Ele usa os mesmos
-módulos do código de produção, mostra as transformações, apresenta a arquitetura, dispara o
-treino e carrega os gráficos/resultados para a entrega. O notebook não replica 400 linhas de
-código por sadismo pedagógico.
+Abra `notebooks/etapa2_cnn_pytorch.ipynb` a partir da raiz do repositório. Ele usa os mesmos módulos do código de produção, mostra as transformações, apresenta a arquitetura, dispara o treino e carrega os gráficos/resultados para a entrega. O notebook não replica 400 linhas de código por sadismo pedagógico.
 
 ## Testes rápidos
 
@@ -114,10 +127,8 @@ código por sadismo pedagógico.
 pytest
 ```
 
-Os testes verificam o contrato RGB `3 x 224 x 224`, o formato de saída binário e a validação
-estrita da estrutura `train/val/test`.
+Os testes verificam o contrato RGB `3 × 224 × 224`, a saída binária e a descoberta/validação da estrutura de dataset.
 
 ## Preparação para a Etapa 3
 
-A infraestrutura foi organizada para reaproveitar loaders, métricas, gráficos e checkpoints no
-transfer learning. O plano está em [`docs/part3_handoff.md`](docs/part3_handoff.md).
+A infraestrutura foi organizada para reaproveitar loaders, métricas, gráficos e checkpoints no transfer learning. O plano está em [`docs/part3_handoff.md`](docs/part3_handoff.md).
