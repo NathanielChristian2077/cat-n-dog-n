@@ -66,6 +66,30 @@ def _summary_row(*, architecture: str, seed: int, summary_path: Path) -> dict[st
     }
 
 
+def _aggregate_runs(runs: pd.DataFrame) -> pd.DataFrame:
+    group_columns = ["architecture", "stage1_rank", "head_hidden_layers", "output_mode"]
+    score_columns = [
+        "best_validation_loss",
+        "test_loss",
+        "test_accuracy",
+        "test_precision",
+        "test_recall",
+        "test_f1",
+        "training_time_seconds",
+    ]
+    summary = runs.groupby(group_columns)[score_columns].agg(["mean", "std"]).reset_index()
+    summary.columns = [
+        "_".join(str(part) for part in column if part).rstrip("_")
+        if isinstance(column, tuple)
+        else str(column)
+        for column in summary.columns
+    ]
+    return summary.sort_values(
+        by=["test_f1_mean", "test_accuracy_mean", "best_validation_loss_mean"],
+        ascending=[False, False, True],
+    )
+
+
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -108,30 +132,7 @@ def main(argv: list[str] | None = None) -> None:
             pd.DataFrame(rows).to_csv(args.output_dir / "comparison_runs.csv", index=False)
 
     runs = pd.DataFrame(rows)
-    score_columns = [
-        "best_validation_loss",
-        "test_loss",
-        "test_accuracy",
-        "test_precision",
-        "test_recall",
-        "test_f1",
-        "training_time_seconds",
-    ]
-    summary = (
-        runs.groupby(["architecture", "stage1_rank", "head_hidden_layers", "output_mode"], as_index=False)[score_columns]
-        .agg(["mean", "std"])
-        .reset_index()
-    )
-    summary.columns = [
-        "_".join(part for part in column if part).rstrip("_")
-        if isinstance(column, tuple)
-        else column
-        for column in summary.columns
-    ]
-    summary = summary.sort_values(
-        by=["test_f1_mean", "test_accuracy_mean", "best_validation_loss_mean"],
-        ascending=[False, False, True],
-    )
+    summary = _aggregate_runs(runs)
     summary.to_csv(args.output_dir / "comparison_summary.csv", index=False)
     print("\nComparação concluída.")
     print(runs[["architecture", "seed", "test_accuracy", "test_f1", "best_validation_loss"]].to_string(index=False))
