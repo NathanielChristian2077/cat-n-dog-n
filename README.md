@@ -46,6 +46,8 @@ dataset/
 
 A classe positiva continua explícita. `--positive-class dogs` também reconhece `cachorros`; use o nome de uma pasta caso o dataset tenha rótulos fora desse par.
 
+No início de cada treino, o programa mostra as contagens negativa/positiva de `train`, `val` e `test`. O treino aplica `pos_weight = negativos / positivos` na BCE para compensar uma divisão de treino desbalanceada, mas validação e teste continuam com BCE comum. Isso não muda os arquivos nem os splits do professor, só impede que a rede ganhe pontos fingindo que toda imagem é a classe majoritária.
+
 ## Setup local com CUDA
 
 Use Python 3.10 ou superior. Primeiro instale um par `torch`/`torchvision` com CUDA compatível com o driver NVIDIA do sistema pelo seletor oficial do PyTorch. Depois instale o projeto no ambiente virtual:
@@ -73,25 +75,28 @@ Coloque o dataset dentro de `dataset/` e rode da raiz do repositório:
 ```bash
 python scripts/train.py \
   --data-dir dataset \
-  --output-dir runs/cnn_scratch \
+  --output-dir runs/cnn_scratch_balanced \
   --positive-class dogs \
-  --epochs 25 \
-  --batch-size 128 \
+  --epochs 40 \
+  --batch-size 32 \
+  --learning-rate 3e-4 \
   --num-workers 8 \
   --device cuda
 ```
 
+`batch-size 32` é o ponto de partida deliberado para datasets acadêmicos pequenos: ele dá mais atualizações por época. Uma RTX com memória sobrando não exige batch 128; isso só deixa a GPU entediada enquanto o otimizador recebe dois ou três gradientes e começa a inventar uma personalidade.
+
 O perfil CUDA já usa AMP FP16, TF32 quando disponível, cuDNN autotuning, `channels_last`, AdamW fundido quando o build suporta, `pin_memory`, workers persistentes e prefetch. A execução padrão privilegia throughput; para uma repetição estritamente determinística, use a `TrainingConfig(deterministic=True)` no notebook ou no código Python.
 
-Se houver erro de memória, reduza apenas o batch: `128 → 96 → 64`. Não mexa no tamanho 224×224, que é requisito da etapa.
+Se houver erro de memória, reduza apenas o batch: `32 → 16`. Não mexa no tamanho 224×224, que é requisito da etapa.
 
 ## Saídas salvas
 
-Após o treino, `runs/cnn_scratch/` conterá:
+Após o treino, `runs/cnn_scratch_balanced/` conterá:
 
 ```text
 artifacts/
-  experiment_config.json   # hiperparâmetros, layout resolvido, ambiente e arquitetura
+  experiment_config.json   # hiperparâmetros, layout resolvido, distribuição de classes, ambiente e arquitetura
   history.csv              # métricas por época, tempo e pico de VRAM
   run_summary.json         # melhor época, tempo e resultado de teste
   test_predictions.csv     # probabilidades e predições do teste
@@ -109,10 +114,10 @@ O melhor checkpoint é escolhido exclusivamente por **loss de validação**. O c
 
 ```bash
 python scripts/evaluate.py \
-  --checkpoint runs/cnn_scratch/checkpoints/best_val_loss.pt \
+  --checkpoint runs/cnn_scratch_balanced/checkpoints/best_val_loss.pt \
   --data-dir dataset \
   --output-dir runs/re_evaluation \
-  --batch-size 128 \
+  --batch-size 32 \
   --num-workers 8 \
   --device cuda
 ```
