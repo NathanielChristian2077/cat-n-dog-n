@@ -160,6 +160,17 @@ def _validate_binary_semantics(train_dataset: BinaryImageFolder, other: BinaryIm
     )
 
 
+def _binary_counts(dataset: BinaryImageFolder, split_name: str) -> dict[str, int]:
+    positive = sum(target == dataset.positive_native_index for target in dataset.targets)
+    negative = len(dataset.targets) - positive
+    if positive == 0 or negative == 0:
+        raise ValueError(
+            f"O split {split_name!r} precisa conter imagens das duas classes; "
+            f"encontrado negativo={negative}, positivo={positive}."
+        )
+    return {"negative": negative, "positive": positive}
+
+
 def build_train_transform(image_size: int) -> transforms.Compose:
     """Return the required RGB 224x224 preprocessing plus four augmentation groups.
 
@@ -208,6 +219,7 @@ class DataBundle:
     positive_class: str
     class_names: tuple[str, str]
     sizes: dict[str, int]
+    class_counts: dict[str, dict[str, int]]
     dataset_root: Path
     split_dirs: dict[str, Path]
 
@@ -260,6 +272,11 @@ def build_data_bundle(config: TrainingConfig) -> DataBundle:
             if _class_family(train_dataset.positive_class) != _class_family(dataset.positive_class):
                 raise ValueError("A classe positiva mudou entre os splits, o que não deveria ser possível.")
 
+    class_counts = {
+        "train": _binary_counts(train_dataset, "train"),
+        "val": _binary_counts(val_dataset, "val"),
+        "test": _binary_counts(test_dataset, "test"),
+    }
     generator = torch.Generator().manual_seed(config.seed)
     train_loader = _build_loader(train_dataset, config, shuffle=True, generator=generator)
     val_loader = _build_loader(val_dataset, config, shuffle=False, generator=None)
@@ -273,6 +290,7 @@ def build_data_bundle(config: TrainingConfig) -> DataBundle:
         positive_class=train_dataset.positive_class,
         class_names=(train_dataset.negative_class, train_dataset.positive_class),
         sizes={"train": len(train_dataset), "val": len(val_dataset), "test": len(test_dataset)},
+        class_counts=class_counts,
         dataset_root=dataset_root,
         split_dirs=split_dirs,
     )
