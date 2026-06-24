@@ -1,20 +1,105 @@
-"""Configuration objects used by the training and evaluation entry points."""
+"""Configuration objects and comparable CNN classifier presets."""
 
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
+
+OutputMode = Literal["sigmoid1", "softmax2"]
+
+
+@dataclass(frozen=True)
+class ClassifierPreset:
+    """Dense head topology inherited from a successful Stage 1 MLP variant."""
+
+    identifier: str
+    hidden_layers: tuple[int, ...]
+    output_mode: OutputMode
+    stage1_rank: int | None
+    description: str
+
+
+CLASSIFIER_PRESETS: dict[str, ClassifierPreset] = {
+    "phase1_rank1_32x64x512_softmax2": ClassifierPreset(
+        identifier="phase1_rank1_32x64x512_softmax2",
+        hidden_layers=(32, 64, 512),
+        output_mode="softmax2",
+        stage1_rank=1,
+        description="Etapa 1 rank 1: 32x64x512 com duas saídas Softmax.",
+    ),
+    "phase1_rank2_32x64x512_sigmoid1": ClassifierPreset(
+        identifier="phase1_rank2_32x64x512_sigmoid1",
+        hidden_layers=(32, 64, 512),
+        output_mode="sigmoid1",
+        stage1_rank=2,
+        description="Etapa 1 rank 2: 32x64x512 com uma saída Sigmoid.",
+    ),
+    "phase1_rank3_64x32x512_sigmoid1": ClassifierPreset(
+        identifier="phase1_rank3_64x32x512_sigmoid1",
+        hidden_layers=(64, 32, 512),
+        output_mode="sigmoid1",
+        stage1_rank=3,
+        description="Etapa 1 rank 3: 64x32x512 com uma saída Sigmoid.",
+    ),
+    "phase1_rank4_128x32x512_sigmoid1": ClassifierPreset(
+        identifier="phase1_rank4_128x32x512_sigmoid1",
+        hidden_layers=(128, 32, 512),
+        output_mode="sigmoid1",
+        stage1_rank=4,
+        description="Etapa 1 rank 4: 128x32x512 com uma saída Sigmoid.",
+    ),
+    "phase1_rank5_64x32x512_softmax2": ClassifierPreset(
+        identifier="phase1_rank5_64x32x512_softmax2",
+        hidden_layers=(64, 32, 512),
+        output_mode="softmax2",
+        stage1_rank=5,
+        description="Etapa 1 rank 5: 64x32x512 com duas saídas Softmax.",
+    ),
+    "phase1_rank6_128x32x512_softmax2": ClassifierPreset(
+        identifier="phase1_rank6_128x32x512_softmax2",
+        hidden_layers=(128, 32, 512),
+        output_mode="softmax2",
+        stage1_rank=6,
+        description="Etapa 1 rank 6: 128x32x512 com duas saídas Softmax.",
+    ),
+    "cnn_baseline_128_sigmoid1": ClassifierPreset(
+        identifier="cnn_baseline_128_sigmoid1",
+        hidden_layers=(128,),
+        output_mode="sigmoid1",
+        stage1_rank=None,
+        description="Baseline CNN anterior: 128 com uma saída Sigmoid.",
+    ),
+}
+
+PHASE1_RANKED_PRESETS: tuple[str, ...] = tuple(
+    preset.identifier
+    for preset in sorted(
+        (preset for preset in CLASSIFIER_PRESETS.values() if preset.stage1_rank is not None),
+        key=lambda preset: preset.stage1_rank or 0,
+    )
+)
+
+
+def architecture_ids() -> tuple[str, ...]:
+    """Return stable CLI choices, ranked Stage 1 variants first."""
+
+    return (*PHASE1_RANKED_PRESETS, "cnn_baseline_128_sigmoid1")
+
+
+def get_classifier_preset(identifier: str) -> ClassifierPreset:
+    """Resolve an explicit classifier preset or fail before a long CUDA job starts."""
+
+    try:
+        return CLASSIFIER_PRESETS[identifier]
+    except KeyError as error:
+        available = ", ".join(architecture_ids())
+        raise ValueError(f"Arquitetura desconhecida: {identifier!r}. Opções: {available}.") from error
 
 
 @dataclass(slots=True)
 class TrainingConfig:
-    """All experiment settings in one serializable object.
-
-    The defaults are aimed at a local CUDA run, but every performance-affecting
-    choice is retained in the experiment artifact. Reproducibility is available
-    through ``deterministic=True`` rather than silently slowing every run.
-    """
+    """All experiment settings in one serializable object."""
 
     data_dir: Path
     output_dir: Path
@@ -27,6 +112,8 @@ class TrainingConfig:
     prefetch_factor: int = 2
     seed: int = 42
     positive_class: str = "dogs"
+    architecture: str = "phase1_rank1_32x64x512_softmax2"
+    classifier_dropout: float = 0.10
     device: str = "auto"
     use_amp: bool = True
     deterministic: bool = False
@@ -55,6 +142,8 @@ class TrainingConfig:
             raise ValueError("num_workers precisa ser não negativo.")
         if self.prefetch_factor < 1:
             raise ValueError("prefetch_factor precisa ser ao menos 1.")
+        if not 0.0 <= self.classifier_dropout < 1.0:
+            raise ValueError("classifier_dropout precisa estar no intervalo [0, 1).")
         if self.early_stopping_patience < 1:
             raise ValueError("early_stopping_patience precisa ser ao menos 1.")
         if self.scheduler_patience < 0:
@@ -63,6 +152,7 @@ class TrainingConfig:
             raise ValueError("scheduler_factor precisa estar entre 0 e 1.")
         if not self.positive_class.strip():
             raise ValueError("positive_class não pode ser vazio.")
+        get_classifier_preset(self.architecture)
 
     def as_dict(self) -> dict[str, Any]:
         payload = asdict(self)
@@ -75,4 +165,7 @@ class TrainingConfig:
         normalized = dict(payload)
         normalized["data_dir"] = Path(normalized["data_dir"])
         normalized["output_dir"] = Path(normalized["output_dir"])
+        # Version-3-and-earlier checkpoints did not encode a classifier preset.
+        normalized.setdefault("architecture", "cnn_baseline_128_sigmoid1")
+        normalized.setdefault("classifier_dropout", 0.10)
         return cls(**normalized)
