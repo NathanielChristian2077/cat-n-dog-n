@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from contextlib import nullcontext
 from dataclasses import dataclass, replace
+from math import ceil
 from pathlib import Path
 from time import perf_counter
 from typing import Any
@@ -141,19 +142,16 @@ def _make_training_criterion(
     config: TrainingConfig,
     device: torch.device,
 ) -> tuple[nn.Module, dict[str, float | bool]]:
-    """Weight the minority positive class without altering the professor's split.
-
-    A split can legitimately be imbalanced, but an unweighted BCE then has a
-    cheap local optimum: predict the majority class for every image. ``pos_weight
-    = negatives / positives`` makes that constant solution sit near 0.5 instead
-    of quietly rewarding the prior. Validation and test remain unweighted.
-    """
+    """Weight a minority positive class without altering the professor's split."""
 
     counts = bundle.class_counts["train"]
     if not config.balance_positive_class:
         return nn.BCEWithLogitsLoss(), {"enabled": False, "pos_weight": 1.0}
 
     pos_weight = counts["negative"] / counts["positive"]
+    if abs(pos_weight - 1.0) < 1e-12:
+        return nn.BCEWithLogitsLoss(), {"enabled": False, "pos_weight": 1.0}
+
     weight_tensor = torch.tensor([pos_weight], device=device, dtype=torch.float32)
     return nn.BCEWithLogitsLoss(pos_weight=weight_tensor), {
         "enabled": True,
@@ -173,7 +171,7 @@ def _checkpoint_payload(
     val_result: EvaluationResult,
 ) -> dict[str, Any]:
     return {
-        "format_version": 3,
+        "format_version": 4,
         "epoch": epoch,
         "best_val_loss": best_val_loss,
         "model_state_dict": model.state_dict(),
@@ -192,6 +190,7 @@ def _checkpoint_payload(
 def _history_row(
     epoch: int,
     train: EvaluationResult,
+    train_clean: EvaluationResult,
     val: EvaluationResult,
     learning_rate: float,
     epoch_time_seconds: float,
@@ -205,6 +204,11 @@ def _history_row(
         "train_precision": train.precision,
         "train_recall": train.recall,
         "train_f1": train.f1,
+        "train_clean_loss": train_clean.loss,
+        "train_clean_accuracy": train_clean.accuracy,
+        "train_clean_precision": train_clean.precision,
+        "train_clean_recall": train_clean.recall,
+        "train_clean_f1": train_clean.f1,
         "val_loss": val.loss,
         "val_accuracy": val.accuracy,
         "val_precision": val.precision,
@@ -256,11 +260,13 @@ def run_training(config: TrainingConfig) -> RunArtifacts:
         f"test neg={bundle.class_counts['test']['negative']}, pos={bundle.class_counts['test']['positive']}"
     )
     updates_per_epoch = len(bundle.train_loader)
-    if updates_per_epoch < 8:
-        print(
-            f"Aviso: batch_size={config.batch_size} gera somente {updates_per_epoch} atualizações por época. "
-            "Para um dataset pequeno, use batch_size=16 ou 32; VRAM ociosa não aprende por osmose."
-        )
+    scheduler_patience = max(config.scheduler_patience, ceil(80 / updates_per_epoch))
+    early_stopping_patience = max(config.early_stopping_patience, ceil(200 / updates_per_epoch))
+    scheduler_warmup_epochs = max(1, ceil(40 / updates_per_epoch))
+    print(
+        f"Atualizações por época: {updates_per_epoch} | scheduler patience={scheduler_patience} "
+        f"após warm-up de {scheduler_warmup_epochs} épocas | early stopping patience={early_stopping_patience}"
+    )
 
     model = _build_model(config, device)
     evaluation_criterion = nn.BCEWithLogitsLoss()
@@ -270,7 +276,7 @@ def run_training(config: TrainingConfig) -> RunArtifacts:
         optimizer,
         mode="min",
         factor=config.scheduler_factor,
-        patience=config.scheduler_patience,
+        patience=scheduler_patience,
     )
     amp_enabled = bool(config.use_amp and device.type == "cuda")
     scaler = torch.amp.GradScaler("cuda", enabled=amp_enabled) if amp_enabled else None
@@ -279,6 +285,12 @@ def run_training(config: TrainingConfig) -> RunArtifacts:
         artifacts_dir / "experiment_config.json",
         {
             "config": config.as_dict(),
+            "training_schedule": {
+                "updates_per_epoch": updates_per_epoch,
+                "scheduler_patience": scheduler_patience,
+                "scheduler_warmup_epochs": scheduler_warmup_epochs,
+                "early_stopping_patience": early_stopping_patience,
+            },
             "dataset": {
                 "root": str(bundle.dataset_root),
                 "split_dirs": {name: str(path) for name, path in bundle.split_dirs.items()},
@@ -323,6 +335,14 @@ def run_training(config: TrainingConfig) -> RunArtifacts:
             max_grad_norm=config.max_grad_norm,
             channels_last=config.channels_last,
         )
+        train_clean_result = _run_loader(
+            model=model,
+            loader=bundle.train_eval_loader,
+            criterion=evaluation_criterion,
+            device=device,
+            amp_enabled=amp_enabled,
+            channels_last=config.channels_last,
+        )
         val_result = _run_loader(
             model=model,
             loader=bundle.val_loader,
@@ -339,12 +359,14 @@ def run_training(config: TrainingConfig) -> RunArtifacts:
             else None
         )
 
-        scheduler.step(val_result.loss)
+        if epoch >= scheduler_warmup_epochs:
+            scheduler.step(val_result.loss)
         current_lr = float(optimizer.param_groups[0]["lr"])
         rows.append(
             _history_row(
                 epoch,
                 train_result,
+                train_clean_result,
                 val_result,
                 current_lr,
                 epoch_time_seconds,
@@ -376,11 +398,12 @@ def run_training(config: TrainingConfig) -> RunArtifacts:
         memory_suffix = f" | peak_vram={max_gpu_memory_mb:.0f} MiB" if max_gpu_memory_mb is not None else ""
         print(
             f"Época {epoch:03d}/{config.epochs} | "
-            f"train loss={train_result.loss:.4f}, acc={train_result.accuracy:.3f} | "
+            f"train_aug acc={train_result.accuracy:.3f} | "
+            f"train_clean acc={train_clean_result.accuracy:.3f} | "
             f"val loss={val_result.loss:.4f}, acc={val_result.accuracy:.3f} | "
             f"lr={current_lr:.2e} | {epoch_time_seconds:.1f}s{memory_suffix}"
         )
-        if stale_epochs >= config.early_stopping_patience:
+        if stale_epochs >= early_stopping_patience:
             print(
                 f"Early stopping após {stale_epochs} épocas sem melhorar a loss de validação. "
                 f"Melhor época: {best_epoch}."
