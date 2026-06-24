@@ -136,6 +136,31 @@ def _make_optimizer(model: nn.Module, config: TrainingConfig, device: torch.devi
     return AdamW(model.parameters(), **base_kwargs), "AdamW"
 
 
+def _make_training_criterion(
+    bundle: DataBundle,
+    config: TrainingConfig,
+    device: torch.device,
+) -> tuple[nn.Module, dict[str, float | bool]]:
+    """Weight the minority positive class without altering the professor's split.
+
+    A split can legitimately be imbalanced, but an unweighted BCE then has a
+    cheap local optimum: predict the majority class for every image. ``pos_weight
+    = negatives / positives`` makes that constant solution sit near 0.5 instead
+    of quietly rewarding the prior. Validation and test remain unweighted.
+    """
+
+    counts = bundle.class_counts["train"]
+    if not config.balance_positive_class:
+        return nn.BCEWithLogitsLoss(), {"enabled": False, "pos_weight": 1.0}
+
+    pos_weight = counts["negative"] / counts["positive"]
+    weight_tensor = torch.tensor([pos_weight], device=device, dtype=torch.float32)
+    return nn.BCEWithLogitsLoss(pos_weight=weight_tensor), {
+        "enabled": True,
+        "pos_weight": float(pos_weight),
+    }
+
+
 def _checkpoint_payload(
     *,
     model: ScratchCNN,
@@ -148,7 +173,7 @@ def _checkpoint_payload(
     val_result: EvaluationResult,
 ) -> dict[str, Any]:
     return {
-        "format_version": 2,
+        "format_version": 3,
         "epoch": epoch,
         "best_val_loss": best_val_loss,
         "model_state_dict": model.state_dict(),
@@ -157,6 +182,7 @@ def _checkpoint_payload(
         "config": config.as_dict(),
         "class_names": list(bundle.class_names),
         "positive_class": bundle.positive_class,
+        "class_counts": bundle.class_counts,
         "dataset_root": str(bundle.dataset_root),
         "split_dirs": {name: str(path) for name, path in bundle.split_dirs.items()},
         "validation_metrics": val_result.compact_dict(),
@@ -222,8 +248,23 @@ def run_training(config: TrainingConfig) -> RunArtifacts:
     artifacts_dir.mkdir(parents=True, exist_ok=True)
 
     bundle = build_data_bundle(config)
+    train_counts = bundle.class_counts["train"]
+    print(
+        "Classes: "
+        f"train neg={train_counts['negative']}, pos={train_counts['positive']} | "
+        f"val neg={bundle.class_counts['val']['negative']}, pos={bundle.class_counts['val']['positive']} | "
+        f"test neg={bundle.class_counts['test']['negative']}, pos={bundle.class_counts['test']['positive']}"
+    )
+    updates_per_epoch = len(bundle.train_loader)
+    if updates_per_epoch < 8:
+        print(
+            f"Aviso: batch_size={config.batch_size} gera somente {updates_per_epoch} atualizações por época. "
+            "Para um dataset pequeno, use batch_size=16 ou 32; VRAM ociosa não aprende por osmose."
+        )
+
     model = _build_model(config, device)
-    criterion = nn.BCEWithLogitsLoss()
+    evaluation_criterion = nn.BCEWithLogitsLoss()
+    training_criterion, class_balance = _make_training_criterion(bundle, config, device)
     optimizer, optimizer_name = _make_optimizer(model, config, device)
     scheduler = ReduceLROnPlateau(
         optimizer,
@@ -243,7 +284,9 @@ def run_training(config: TrainingConfig) -> RunArtifacts:
                 "split_dirs": {name: str(path) for name, path in bundle.split_dirs.items()},
                 "sizes": bundle.sizes,
                 "class_names": list(bundle.class_names),
+                "class_counts": bundle.class_counts,
             },
+            "class_balance": class_balance,
             "runtime": runtime_snapshot(device),
             "optimizer": optimizer_name,
             "model": {
@@ -272,7 +315,7 @@ def run_training(config: TrainingConfig) -> RunArtifacts:
         train_result = _run_loader(
             model=model,
             loader=bundle.train_loader,
-            criterion=criterion,
+            criterion=training_criterion,
             device=device,
             optimizer=optimizer,
             scaler=scaler,
@@ -283,7 +326,7 @@ def run_training(config: TrainingConfig) -> RunArtifacts:
         val_result = _run_loader(
             model=model,
             loader=bundle.val_loader,
-            criterion=criterion,
+            criterion=evaluation_criterion,
             device=device,
             amp_enabled=amp_enabled,
             channels_last=config.channels_last,
@@ -357,7 +400,7 @@ def run_training(config: TrainingConfig) -> RunArtifacts:
     test_result = _run_loader(
         model=model,
         loader=bundle.test_loader,
-        criterion=criterion,
+        criterion=evaluation_criterion,
         device=device,
         amp_enabled=amp_enabled,
         channels_last=config.channels_last,
@@ -383,7 +426,9 @@ def run_training(config: TrainingConfig) -> RunArtifacts:
             "root": str(bundle.dataset_root),
             "sizes": bundle.sizes,
             "class_names": list(bundle.class_names),
+            "class_counts": bundle.class_counts,
         },
+        "class_balance": class_balance,
         "runtime": runtime_snapshot(device),
         "artifacts": {
             "best_checkpoint": str(best_checkpoint),
