@@ -18,6 +18,7 @@ src/cnn_cats_dogs/
 ├── transfer_config.py    # hiperparâmetros e validação
 ├── transfer_data.py      # transforms por peso oficial e loaders do dataset do professor
 ├── transfer_engine.py    # treino em duas fases, métricas, checkpoints e avaliação final
+├── dataset_audit.py      # auditoria de duplicatas exatas e candidatos perceptuais entre splits
 ├── transfer.py           # uma execução individual
 ├── transfer_compare.py   # comparação dos três modelos por validação e seeds
 └── transfer_evaluate.py  # avaliação única do checkpoint vencedor no teste
@@ -56,12 +57,27 @@ As imagens permanecem RGB `3×224×224`.
 
 `transfer_compare.py` deliberadamente **não consulta o teste**. Ele executa os modelos com seeds diferentes e ordena `comparison_summary.csv` pela média da melhor loss de validação. Só depois de escolher arquitetura e seed pelo conjunto de validação deve-se executar `transfer_evaluate.py` uma única vez no teste.
 
+## Auditoria de integridade do dataset
+
+Resultados próximos de 100% em validação merecem ser verificados antes de virar frase de relatório. O script abaixo produz:
+
+- `exact_cross_split_duplicates.csv`: repetição byte-a-byte entre splits, evidência objetiva de vazamento;
+- `near_cross_split_candidates.csv`: pares visualmente similares por dHash, candidatos para inspeção visual, não prova automática;
+- `image_manifest.csv` e `summary.json` para rastreabilidade.
+
+```bash
+python3 scripts/audit_dataset.py \
+  --data-dir dataset \
+  --output-dir runs/dataset_audit \
+  --dhash-threshold 4
+```
+
 ## Execução
 
 Triagem dos três modelos em uma seed:
 
 ```bash
-python -m cnn_cats_dogs.transfer_compare \
+python3 scripts/compare_transfer.py \
   --data-dir dataset \
   --output-dir runs/transfer_smoke \
   --seeds 42 \
@@ -75,7 +91,7 @@ python -m cnn_cats_dogs.transfer_compare \
 Comparação formal com três seeds:
 
 ```bash
-python -m cnn_cats_dogs.transfer_compare \
+python3 scripts/compare_transfer.py \
   --data-dir dataset \
   --output-dir runs/transfer_comparison \
   --seeds 42 73 101 \
@@ -89,7 +105,7 @@ python -m cnn_cats_dogs.transfer_compare \
 Treino de um modelo isolado, sem abrir o teste:
 
 ```bash
-python -m cnn_cats_dogs.transfer \
+python3 scripts/train_transfer.py \
   --data-dir dataset \
   --output-dir runs/efficientnet_b0_seed42 \
   --architecture efficientnet_b0 \
@@ -104,7 +120,7 @@ python -m cnn_cats_dogs.transfer \
 Avaliação final de um checkpoint selecionado por validação:
 
 ```bash
-python -m cnn_cats_dogs.transfer_evaluate \
+python3 scripts/evaluate_transfer.py \
   --checkpoint runs/efficientnet_b0_seed42/checkpoints/best_val_loss.pt \
   --data-dir dataset \
   --output-dir runs/efficientnet_b0_final_test \
