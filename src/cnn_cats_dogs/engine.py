@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from contextlib import nullcontext
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from time import perf_counter
 from typing import Any
@@ -19,7 +19,14 @@ from .config import TrainingConfig
 from .data import DataBundle, build_data_bundle
 from .metrics import EvaluationResult, make_evaluation_result
 from .model import ScratchCNN, count_trainable_parameters
-from .utils import atomic_torch_save, resolve_device, runtime_snapshot, set_global_seed, write_json
+from .utils import (
+    atomic_torch_save,
+    resolve_device,
+    resolve_num_workers,
+    runtime_snapshot,
+    set_global_seed,
+    write_json,
+)
 from .visualization import plot_confusion_matrix, plot_learning_curves
 
 
@@ -38,13 +45,23 @@ def _autocast_context(device: torch.device, enabled: bool):
     return nullcontext()
 
 
+def _synchronize(device: torch.device) -> None:
+    if device.type == "cuda":
+        torch.cuda.synchronize(device)
+
+
 def _move_batch(
     images: torch.Tensor,
     labels: torch.Tensor,
     device: torch.device,
+    *,
+    channels_last: bool,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     non_blocking = device.type == "cuda"
-    images = images.to(device, non_blocking=non_blocking)
+    if channels_last and device.type == "cuda":
+        images = images.to(device, non_blocking=non_blocking, memory_format=torch.channels_last)
+    else:
+        images = images.to(device, non_blocking=non_blocking)
     labels = labels.to(device, non_blocking=non_blocking).float().unsqueeze(1)
     return images, labels
 
@@ -59,6 +76,7 @@ def _run_loader(
     scaler: torch.amp.GradScaler | None = None,
     amp_enabled: bool = False,
     max_grad_norm: float | None = None,
+    channels_last: bool = False,
 ) -> EvaluationResult:
     is_training = optimizer is not None
     model.train(is_training)
@@ -69,7 +87,7 @@ def _run_loader(
     all_probabilities: list[float] = []
 
     for images, labels in loader:
-        images, labels = _move_batch(images, labels, device)
+        images, labels = _move_batch(images, labels, device, channels_last=channels_last)
         if is_training:
             optimizer.zero_grad(set_to_none=True)
 
@@ -106,6 +124,18 @@ def _run_loader(
     )
 
 
+def _make_optimizer(model: nn.Module, config: TrainingConfig, device: torch.device) -> tuple[AdamW, str]:
+    """Use fused AdamW when the local CUDA build supports it, then fall back safely."""
+
+    base_kwargs = {"lr": config.learning_rate, "weight_decay": config.weight_decay}
+    if device.type == "cuda":
+        try:
+            return AdamW(model.parameters(), fused=True, **base_kwargs), "AdamW(fused=True)"
+        except (RuntimeError, TypeError):
+            pass
+    return AdamW(model.parameters(), **base_kwargs), "AdamW"
+
+
 def _checkpoint_payload(
     *,
     model: ScratchCNN,
@@ -118,7 +148,7 @@ def _checkpoint_payload(
     val_result: EvaluationResult,
 ) -> dict[str, Any]:
     return {
-        "format_version": 1,
+        "format_version": 2,
         "epoch": epoch,
         "best_val_loss": best_val_loss,
         "model_state_dict": model.state_dict(),
@@ -127,11 +157,20 @@ def _checkpoint_payload(
         "config": config.as_dict(),
         "class_names": list(bundle.class_names),
         "positive_class": bundle.positive_class,
+        "dataset_root": str(bundle.dataset_root),
+        "split_dirs": {name: str(path) for name, path in bundle.split_dirs.items()},
         "validation_metrics": val_result.compact_dict(),
     }
 
 
-def _history_row(epoch: int, train: EvaluationResult, val: EvaluationResult, learning_rate: float) -> dict[str, float | int]:
+def _history_row(
+    epoch: int,
+    train: EvaluationResult,
+    val: EvaluationResult,
+    learning_rate: float,
+    epoch_time_seconds: float,
+    max_gpu_memory_mb: float | None,
+) -> dict[str, float | int | None]:
     return {
         "epoch": epoch,
         "learning_rate": learning_rate,
@@ -145,13 +184,35 @@ def _history_row(epoch: int, train: EvaluationResult, val: EvaluationResult, lea
         "val_precision": val.precision,
         "val_recall": val.recall,
         "val_f1": val.f1,
+        "epoch_time_seconds": epoch_time_seconds,
+        "max_gpu_memory_mb": max_gpu_memory_mb,
     }
+
+
+def _prepare_runtime_config(config: TrainingConfig) -> tuple[TrainingConfig, torch.device]:
+    device = resolve_device(config.device)
+    resolved_workers = resolve_num_workers(config.num_workers, device)
+    prepared = replace(config, device=str(device), num_workers=resolved_workers)
+    prepared.validate()
+    set_global_seed(
+        prepared.seed,
+        deterministic=prepared.deterministic,
+        enable_tf32=prepared.enable_tf32,
+    )
+    return prepared, device
+
+
+def _build_model(config: TrainingConfig, device: torch.device) -> ScratchCNN:
+    model = ScratchCNN()
+    if config.channels_last and device.type == "cuda":
+        model = model.to(memory_format=torch.channels_last)
+    return model.to(device)
 
 
 def run_training(config: TrainingConfig) -> RunArtifacts:
     """Train the required CNN and persist every artifact needed by the report."""
 
-    config.validate()
+    config, device = _prepare_runtime_config(config)
     config.output_dir.mkdir(parents=True, exist_ok=True)
     checkpoints_dir = config.output_dir / "checkpoints"
     plots_dir = config.output_dir / "plots"
@@ -160,27 +221,31 @@ def run_training(config: TrainingConfig) -> RunArtifacts:
     plots_dir.mkdir(parents=True, exist_ok=True)
     artifacts_dir.mkdir(parents=True, exist_ok=True)
 
-    set_global_seed(config.seed)
-    device = resolve_device(config.device)
-    amp_enabled = bool(config.use_amp and device.type == "cuda")
     bundle = build_data_bundle(config)
-    model = ScratchCNN().to(device)
+    model = _build_model(config, device)
     criterion = nn.BCEWithLogitsLoss()
-    optimizer = AdamW(model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay)
+    optimizer, optimizer_name = _make_optimizer(model, config, device)
     scheduler = ReduceLROnPlateau(
         optimizer,
         mode="min",
         factor=config.scheduler_factor,
         patience=config.scheduler_patience,
     )
-    scaler = torch.amp.GradScaler("cuda", enabled=True) if amp_enabled else None
+    amp_enabled = bool(config.use_amp and device.type == "cuda")
+    scaler = torch.amp.GradScaler("cuda", enabled=amp_enabled) if amp_enabled else None
 
     write_json(
         artifacts_dir / "experiment_config.json",
         {
             "config": config.as_dict(),
-            "dataset": {"sizes": bundle.sizes, "class_names": list(bundle.class_names)},
+            "dataset": {
+                "root": str(bundle.dataset_root),
+                "split_dirs": {name: str(path) for name, path in bundle.split_dirs.items()},
+                "sizes": bundle.sizes,
+                "class_names": list(bundle.class_names),
+            },
             "runtime": runtime_snapshot(device),
+            "optimizer": optimizer_name,
             "model": {
                 "name": "ScratchCNN",
                 "trainable_parameters": count_trainable_parameters(model),
@@ -189,15 +254,21 @@ def run_training(config: TrainingConfig) -> RunArtifacts:
         },
     )
 
-    rows: list[dict[str, float | int]] = []
+    rows: list[dict[str, float | int | None]] = []
     best_val_loss = float("inf")
     best_epoch = 0
     stale_epochs = 0
     best_checkpoint = checkpoints_dir / "best_val_loss.pt"
     last_checkpoint = checkpoints_dir / "last.pt"
+    _synchronize(device)
     started_at = perf_counter()
 
     for epoch in range(1, config.epochs + 1):
+        if device.type == "cuda":
+            torch.cuda.reset_peak_memory_stats(device)
+        _synchronize(device)
+        epoch_started_at = perf_counter()
+
         train_result = _run_loader(
             model=model,
             loader=bundle.train_loader,
@@ -207,6 +278,7 @@ def run_training(config: TrainingConfig) -> RunArtifacts:
             scaler=scaler,
             amp_enabled=amp_enabled,
             max_grad_norm=config.max_grad_norm,
+            channels_last=config.channels_last,
         )
         val_result = _run_loader(
             model=model,
@@ -214,10 +286,28 @@ def run_training(config: TrainingConfig) -> RunArtifacts:
             criterion=criterion,
             device=device,
             amp_enabled=amp_enabled,
+            channels_last=config.channels_last,
         )
+        _synchronize(device)
+        epoch_time_seconds = perf_counter() - epoch_started_at
+        max_gpu_memory_mb = (
+            round(torch.cuda.max_memory_allocated(device) / (1024**2), 1)
+            if device.type == "cuda"
+            else None
+        )
+
         scheduler.step(val_result.loss)
         current_lr = float(optimizer.param_groups[0]["lr"])
-        rows.append(_history_row(epoch, train_result, val_result, current_lr))
+        rows.append(
+            _history_row(
+                epoch,
+                train_result,
+                val_result,
+                current_lr,
+                epoch_time_seconds,
+                max_gpu_memory_mb,
+            )
+        )
 
         payload = _checkpoint_payload(
             model=model,
@@ -240,11 +330,12 @@ def run_training(config: TrainingConfig) -> RunArtifacts:
         else:
             stale_epochs += 1
 
+        memory_suffix = f" | peak_vram={max_gpu_memory_mb:.0f} MiB" if max_gpu_memory_mb is not None else ""
         print(
             f"Época {epoch:03d}/{config.epochs} | "
             f"train loss={train_result.loss:.4f}, acc={train_result.accuracy:.3f} | "
             f"val loss={val_result.loss:.4f}, acc={val_result.accuracy:.3f} | "
-            f"lr={current_lr:.2e}"
+            f"lr={current_lr:.2e} | {epoch_time_seconds:.1f}s{memory_suffix}"
         )
         if stale_epochs >= config.early_stopping_patience:
             print(
@@ -253,6 +344,7 @@ def run_training(config: TrainingConfig) -> RunArtifacts:
             )
             break
 
+    _synchronize(device)
     elapsed_seconds = perf_counter() - started_at
     history = pd.DataFrame(rows)
     history_path = artifacts_dir / "history.csv"
@@ -268,6 +360,7 @@ def run_training(config: TrainingConfig) -> RunArtifacts:
         criterion=criterion,
         device=device,
         amp_enabled=amp_enabled,
+        channels_last=config.channels_last,
     )
     plot_confusion_matrix(test_result, bundle.class_names, plots_dir / "confusion_matrix_test.png")
 
@@ -286,7 +379,12 @@ def run_training(config: TrainingConfig) -> RunArtifacts:
         "training_time_seconds": elapsed_seconds,
         "best_validation_loss": best_val_loss,
         "test_metrics": test_result.compact_dict(),
-        "dataset": {"sizes": bundle.sizes, "class_names": list(bundle.class_names)},
+        "dataset": {
+            "root": str(bundle.dataset_root),
+            "sizes": bundle.sizes,
+            "class_names": list(bundle.class_names),
+        },
+        "runtime": runtime_snapshot(device),
         "artifacts": {
             "best_checkpoint": str(best_checkpoint),
             "last_checkpoint": str(last_checkpoint),
@@ -313,7 +411,7 @@ def evaluate_checkpoint(
     data_dir: Path,
     output_dir: Path,
     batch_size: int | None = None,
-    num_workers: int | None = None,
+    num_workers: int | str | None = None,
     device_name: str = "auto",
 ) -> EvaluationResult:
     """Evaluate a saved CNN on the untouched test split."""
@@ -331,16 +429,18 @@ def evaluate_checkpoint(
             "device": str(device),
         }
     )
+    config = replace(config, num_workers=resolve_num_workers(config.num_workers, device))
     config.validate()
     bundle = build_data_bundle(config)
-    model = ScratchCNN().to(device)
+    model = _build_model(config, device)
     model.load_state_dict(checkpoint["model_state_dict"])
     result = _run_loader(
         model=model,
         loader=bundle.test_loader,
         criterion=nn.BCEWithLogitsLoss(),
         device=device,
-        amp_enabled=False,
+        amp_enabled=bool(config.use_amp and device.type == "cuda"),
+        channels_last=config.channels_last,
     )
     output_dir.mkdir(parents=True, exist_ok=True)
     write_json(output_dir / "evaluation_summary.json", result.compact_dict())
