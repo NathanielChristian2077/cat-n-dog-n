@@ -1,0 +1,12 @@
+# Install a PyTorch/TorchVision pair compatible with your operating system and CUDA setup.
+# On Google Colab, PyTorch is already available.
+torch>=2.2
+torchvision>=0.17
+numpy>=1.26
+pandas>=2.1
+matplotlib>=3.8
+scikit-learn>=1.4
+Pillow>=10.0
+jupyterlab>=4.0
+ipykernel>=6.0
+pytest>=8.0
