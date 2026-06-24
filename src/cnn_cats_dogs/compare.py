@@ -84,9 +84,11 @@ def _aggregate_runs(runs: pd.DataFrame) -> pd.DataFrame:
         else str(column)
         for column in summary.columns
     ]
+    # Test metrics remain in the table for the final report, but architecture
+    # selection is deliberately based only on validation loss.
     return summary.sort_values(
-        by=["test_f1_mean", "test_accuracy_mean", "best_validation_loss_mean"],
-        ascending=[False, False, True],
+        by=["best_validation_loss_mean", "best_validation_loss_std"],
+        ascending=[True, True],
     )
 
 
@@ -135,10 +137,9 @@ def main(argv: list[str] | None = None) -> None:
     summary = _aggregate_runs(runs)
     summary.to_csv(args.output_dir / "comparison_summary.csv", index=False)
     print("\nComparação concluída.")
-    print(runs[["architecture", "seed", "test_accuracy", "test_f1", "best_validation_loss"]].to_string(index=False))
+    print(runs[["architecture", "seed", "best_validation_loss", "test_accuracy", "test_f1"]].to_string(index=False))
     print(f"\nDetalhes por execução: {args.output_dir / 'comparison_runs.csv'}")
-    print(f"Resumo agregado: {args.output_dir / 'comparison_summary.csv'}")
+    print(f"Resumo agregado, ordenado por validação: {args.output_dir / 'comparison_summary.csv'}")
 
 
-if __name__ == "__main__":
-    main()
+if __name__ == "__main__":n    main()
