@@ -1,0 +1,114 @@
+{
+  "checkpoint": "runs/transfer_comparison/resnet18/seed_42/checkpoints/best_val_loss.pt",
+  "architecture": {
+    "identifier": "resnet18",
+    "display_name": "ResNet18",
+    "weights": "ResNet18_Weights.IMAGENET1K_V1",
+    "weights_url": "https://download.pytorch.org/models/resnet18-f37072fd.pth",
+    "final_stage": "layer4",
+    "parameters_millions_reference": 11.69,
+    "flops_giga_reference": 1.81,
+    "evaluation_crop_size": [
+      224
+    ],
+    "evaluation_resize_size": [
+      256
+    ],
+    "normalization_mean": [
+      0.485,
+      0.456,
+      0.406
+    ],
+    "normalization_std": [
+      0.229,
+      0.224,
+      0.225
+    ],
+    "interpolation": "InterpolationMode.BILINEAR"
+  },
+  "test_metrics": {
+    "loss": 0.026424223184585573,
+    "accuracy": 0.99,
+    "precision": 0.9803921568627451,
+    "recall": 1.0,
+    "f1": 0.9900990099009901,
+    "n_samples": 100,
+    "confusion_matrix": [
+      [
+        49,
+        1
+      ],
+      [
+        0,
+        50
+      ]
+    ]
+  },
+  "dataset": {
+    "root": "dataset",
+    "sizes": {
+      "train": 300,
+      "val": 100,
+      "test": 100
+    },
+    "class_names": [
+      "cat",
+      "dog"
+    ],
+    "class_counts": {
+      "train": {
+        "negative": 150,
+        "positive": 150
+      },
+      "val": {
+        "negative": 50,
+        "positive": 50
+      },
+      "test": {
+        "negative": 50,
+        "positive": 50
+      }
+    }
+  },
+  "transforms": {
+    "weights": "ResNet18_Weights.IMAGENET1K_V1",
+    "evaluation_transform": "ImageClassification(\n    crop_size=[224]\n    resize_size=[256]\n    mean=[0.485, 0.456, 0.406]\n    std=[0.229, 0.224, 0.225]\n    interpolation=InterpolationMode.BILINEAR\n)",
+    "evaluation_crop_size": 224,
+    "evaluation_resize_size": 256,
+    "normalization_mean": [
+      0.485,
+      0.456,
+      0.406
+    ],
+    "normalization_std": [
+      0.229,
+      0.224,
+      0.225
+    ],
+    "interpolation": "InterpolationMode.BILINEAR",
+    "train_augmentations": [
+      "RandomResizedCrop(scale=0.85..1.00)",
+      "RandomHorizontalFlip(p=0.50)",
+      "ColorJitter",
+      "RandomErasing(p=0.05)"
+    ]
+  },
+  "runtime": {
+    "timestamp_utc": "2026-06-24T22:09:46.915388+00:00",
+    "python": "3.14.5",
+    "platform": "Linux-6.18.33.1-microsoft-standard-WSL2-x86_64-with-glibc2.43",
+    "logical_cpu_count": 16,
+    "pytorch": "2.12.1+cu130",
+    "torch_cuda_build": "13.0",
+    "device": "cuda",
+    "cuda_available": true,
+    "cudnn_benchmark": false,
+    "cudnn_deterministic": false,
+    "gpu_name": "NVIDIA GeForce RTX 4070 SUPER",
+    "gpu_memory_gb": 11.99,
+    "gpu_compute_capability": "8.9",
+    "cudnn_version": 92000,
+    "tf32_matmul": false,
+    "tf32_cudnn": true
+  }
+}

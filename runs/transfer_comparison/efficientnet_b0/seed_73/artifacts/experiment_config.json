@@ -1,0 +1,133 @@
+{
+  "config": {
+    "data_dir": "dataset",
+    "output_dir": "runs/transfer_comparison/efficientnet_b0/seed_73",
+    "architecture": "efficientnet_b0",
+    "positive_class": "dogs",
+    "image_size": 224,
+    "batch_size": 32,
+    "head_epochs": 12,
+    "finetune_epochs": 20,
+    "head_learning_rate": 0.001,
+    "finetune_learning_rate": 0.0001,
+    "weight_decay": 0.0001,
+    "num_workers": 8,
+    "prefetch_factor": 2,
+    "seed": 73,
+    "device": "cuda",
+    "use_amp": true,
+    "deterministic": false,
+    "enable_tf32": true,
+    "channels_last": true,
+    "balance_positive_class": true,
+    "early_stopping_patience": 6,
+    "scheduler_patience": 3,
+    "scheduler_factor": 0.5,
+    "max_grad_norm": 5.0,
+    "evaluate_test": false
+  },
+  "architecture": {
+    "identifier": "efficientnet_b0",
+    "display_name": "EfficientNet-B0",
+    "weights": "EfficientNet_B0_Weights.IMAGENET1K_V1",
+    "weights_url": "https://download.pytorch.org/models/efficientnet_b0_rwightman-7f5810bc.pth",
+    "final_stage": "features[-1]",
+    "parameters_millions_reference": 5.29,
+    "flops_giga_reference": 0.39,
+    "evaluation_crop_size": [
+      224
+    ],
+    "evaluation_resize_size": [
+      256
+    ],
+    "normalization_mean": [
+      0.485,
+      0.456,
+      0.406
+    ],
+    "normalization_std": [
+      0.229,
+      0.224,
+      0.225
+    ],
+    "interpolation": "InterpolationMode.BICUBIC"
+  },
+  "dataset": {
+    "root": "dataset",
+    "split_dirs": {
+      "test": "dataset/test",
+      "train": "dataset/train",
+      "val": "dataset/validation"
+    },
+    "sizes": {
+      "train": 300,
+      "val": 100,
+      "test": 100
+    },
+    "class_names": [
+      "cat",
+      "dog"
+    ],
+    "class_counts": {
+      "train": {
+        "negative": 150,
+        "positive": 150
+      },
+      "val": {
+        "negative": 50,
+        "positive": 50
+      },
+      "test": {
+        "negative": 50,
+        "positive": 50
+      }
+    }
+  },
+  "transforms": {
+    "weights": "EfficientNet_B0_Weights.IMAGENET1K_V1",
+    "evaluation_transform": "ImageClassification(\n    crop_size=[224]\n    resize_size=[256]\n    mean=[0.485, 0.456, 0.406]\n    std=[0.229, 0.224, 0.225]\n    interpolation=InterpolationMode.BICUBIC\n)",
+    "evaluation_crop_size": 224,
+    "evaluation_resize_size": 256,
+    "normalization_mean": [
+      0.485,
+      0.456,
+      0.406
+    ],
+    "normalization_std": [
+      0.229,
+      0.224,
+      0.225
+    ],
+    "interpolation": "InterpolationMode.BICUBIC",
+    "train_augmentations": [
+      "RandomResizedCrop(scale=0.85..1.00)",
+      "RandomHorizontalFlip(p=0.50)",
+      "ColorJitter",
+      "RandomErasing(p=0.05)"
+    ]
+  },
+  "runtime": {
+    "timestamp_utc": "2026-06-24T21:57:26.251730+00:00",
+    "python": "3.14.5",
+    "platform": "Linux-6.18.33.1-microsoft-standard-WSL2-x86_64-with-glibc2.43",
+    "logical_cpu_count": 16,
+    "pytorch": "2.12.1+cu130",
+    "torch_cuda_build": "13.0",
+    "device": "cuda",
+    "cuda_available": true,
+    "cudnn_benchmark": true,
+    "cudnn_deterministic": false,
+    "gpu_name": "NVIDIA GeForce RTX 4070 SUPER",
+    "gpu_memory_gb": 11.99,
+    "gpu_compute_capability": "8.9",
+    "cudnn_version": 92000,
+    "tf32_matmul": true,
+    "tf32_cudnn": true
+  },
+  "initial_head_trainability": {
+    "phase": "head",
+    "trainable_modules": "classifier",
+    "total_parameters": 4010110,
+    "trainable_parameters": 2562
+  }
+}
