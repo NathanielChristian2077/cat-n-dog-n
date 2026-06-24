@@ -13,12 +13,13 @@ from .metrics import EvaluationResult
 
 
 def plot_learning_curves(history: pd.DataFrame, output_path: Path) -> None:
-    """Plot loss and accuracy by epoch without requiring the notebook to stay open."""
+    """Plot augmented-train, clean-train, and validation learning signals."""
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig, axes = plt.subplots(1, 2, figsize=(12, 4.5))
 
-    axes[0].plot(history["epoch"], history["train_loss"], label="Treino")
+    axes[0].plot(history["epoch"], history["train_loss"], label="Treino aumentado")
+    axes[0].plot(history["epoch"], history["train_clean_loss"], label="Treino limpo")
     axes[0].plot(history["epoch"], history["val_loss"], label="Validação")
     axes[0].set_title("Loss por época")
     axes[0].set_xlabel("Época")
@@ -26,7 +27,8 @@ def plot_learning_curves(history: pd.DataFrame, output_path: Path) -> None:
     axes[0].legend()
     axes[0].grid(alpha=0.25)
 
-    axes[1].plot(history["epoch"], history["train_accuracy"], label="Treino")
+    axes[1].plot(history["epoch"], history["train_accuracy"], label="Treino aumentado")
+    axes[1].plot(history["epoch"], history["train_clean_accuracy"], label="Treino limpo")
     axes[1].plot(history["epoch"], history["val_accuracy"], label="Validação")
     axes[1].set_title("Acurácia por época")
     axes[1].set_xlabel("Época")
