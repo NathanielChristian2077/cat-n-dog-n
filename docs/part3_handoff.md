@@ -1,69 +1,57 @@
 # Etapa 3: Transfer Learning
 
-A implementação da Etapa 3 está pronta nesta branch. Ela reaproveita o contrato experimental consolidado na Etapa 2: mesma divisão `train/val/test`, métricas, gráficos, checkpoints e estrutura de artefatos. A diferença é a origem da representação visual: pesos ImageNet oficiais do TorchVision, com o classificador adaptado para gatos versus cães.
+A Etapa 3 está implementada nesta branch e utiliza pesos ImageNet oficiais do TorchVision para classificar gatos e cães. Ela reaproveita a divisão fornecida pelo professor, as métricas, os artefatos e o cuidado metodológico estabelecido na Etapa 2.
 
-## Modelos implementados
+O resultado consolidado e a interpretação para o relatório estão em [`final_results.md`](final_results.md). O notebook correspondente é [`../notebooks/etapa3_transfer_learning.ipynb`](../notebooks/etapa3_transfer_learning.ipynb).
 
-- `resnet18`: baseline residual clássico.
-- `efficientnet_b0`: comparação de eficiência.
-- `convnext_tiny`: comparação de maior capacidade.
+## Backbones implementados
 
-Cada um recebe uma camada final nova com **dois logits** e é treinado com `CrossEntropyLoss`. A Softmax é aplicada apenas para gerar a probabilidade positiva nas métricas, não dentro do modelo.
+| Identificador | Papel experimental | Parâmetros totais aproximados | VRAM observada no fine-tuning |
+|---|---|---:|---:|
+| `resnet18` | baseline residual | 11,18 M | 330 MiB |
+| `efficientnet_b0` | eficiência | 4,01 M | 231 MiB |
+| `convnext_tiny` | maior capacidade | 27,82 M | 634 MiB |
 
-## Pipeline implementado
+Cada modelo substitui a classificação ImageNet por uma camada de dois logits e usa `CrossEntropyLoss`. A Softmax não aparece dentro do modelo: ela é usada apenas para transformar logits em probabilidades durante a avaliação.
 
-```text
-src/cnn_cats_dogs/
-├── transfer_models.py    # factory dos pesos oficiais, cabeça binária e freeze/unfreeze
-├── transfer_config.py    # hiperparâmetros e validação
-├── transfer_data.py      # transforms por peso oficial e loaders do dataset do professor
-├── transfer_engine.py    # treino em duas fases, métricas, checkpoints e avaliação final
-├── dataset_audit.py      # auditoria de duplicatas exatas e candidatos perceptuais entre splits
-├── transfer.py           # uma execução individual
-├── transfer_compare.py   # comparação dos três modelos por validação e seeds
-└── transfer_evaluate.py  # avaliação única do checkpoint vencedor no teste
-```
-
-## Estratégia de fine-tuning
+## Protocolo de treino
 
 ### Fase 1: adaptação da cabeça
 
-- carrega pesos ImageNet oficiais;
-- congela todo o backbone;
-- treina apenas o classificador binário novo;
-- mantém BatchNorm congelada em modo de avaliação para não destruir estatísticas ImageNet com batches pequenos.
+- carrega os pesos oficiais;
+- congela o backbone;
+- treina somente o classificador binário novo;
+- mantém BatchNorm congelada em modo de avaliação quando seus parâmetros permanecem congelados.
 
 ### Fase 2: fine-tuning parcial
 
 - recarrega o melhor checkpoint da Fase 1;
-- libera apenas o último estágio visual e o classificador;
-- usa learning rate menor;
-- seleciona o checkpoint global pela menor loss de validação.
+- libera o último estágio visual e o classificador;
+- reduz o learning rate de `1e-3` para `1e-4`;
+- salva o melhor checkpoint de cada fase e o melhor checkpoint global pela loss de validação.
 
-O checkpoint escolhido pode pertencer à Fase 1 ou à Fase 2. Fine-tuning não recebe troféu de participação só porque veio depois.
+A execução não presume que a segunda fase seja automaticamente melhor. O checkpoint final pode ser o melhor da Fase 1 ou da Fase 2.
 
-## Preprocessamento
+## Preprocessamento e augmentation
 
-Validação e teste usam exatamente `weights.transforms()` de cada peso oficial. O treino mantém os mesmos grupos de augmentation exigidos pelo enunciado, antes da normalização ImageNet correspondente:
+Validação e teste usam o `weights.transforms()` de cada conjunto de pesos oficial. O treino preserva quatro grupos de augmentation, aplicados antes da normalização ImageNet correspondente:
 
-1. `RandomResizedCrop`: grupo espacial de crop/escala;
-2. `RandomHorizontalFlip`: grupo geométrico;
-3. `ColorJitter`: grupo fotométrico;
-4. `RandomErasing`: grupo de oclusão/regularização.
+1. `RandomResizedCrop` para crop/escala espacial;
+2. `RandomHorizontalFlip` para reflexão geométrica;
+3. `ColorJitter` para perturbação fotométrica;
+4. `RandomErasing` para oclusão/regularização.
 
-As imagens permanecem RGB `3×224×224`.
+Todas as imagens permanecem RGB `3×224×224`.
 
-## Protocolo correto de seleção
+## Seleção e teste final
 
-`transfer_compare.py` deliberadamente **não consulta o teste**. Ele executa os modelos com seeds diferentes e ordena `comparison_summary.csv` pela média da melhor loss de validação. Só depois de escolher arquitetura e seed pelo conjunto de validação deve-se executar `transfer_evaluate.py` uma única vez no teste.
+A tabela de comparação de validação é ordenada pela média da melhor loss de validação em três seeds: `42`, `73` e `101`. O script `compare_transfer.py` não consulta o teste.
+
+Depois de congelar o protocolo, foram avaliados no teste os nove checkpoints já definidos pela combinação de três arquiteturas e três seeds. Essa avaliação mede estabilidade de treinamento e comparação final entre alternativas pré-especificadas. Nenhum hiperparâmetro, limiar, augmentation ou arquitetura deve ser ajustado a partir desses resultados.
 
 ## Auditoria de integridade do dataset
 
-Resultados próximos de 100% em validação merecem ser verificados antes de virar frase de relatório. O script abaixo produz:
-
-- `exact_cross_split_duplicates.csv`: repetição byte-a-byte entre splits, evidência objetiva de vazamento;
-- `near_cross_split_candidates.csv`: pares visualmente similares por dHash, candidatos para inspeção visual, não prova automática;
-- `image_manifest.csv` e `summary.json` para rastreabilidade.
+Antes de defender métricas próximas de 100%, execute:
 
 ```bash
 python3 scripts/audit_dataset.py \
@@ -72,23 +60,11 @@ python3 scripts/audit_dataset.py \
   --dhash-threshold 4
 ```
 
-## Execução
+O script procura duplicatas byte-a-byte entre splits e candidatos visualmente similares por dHash. Uma duplicata exata entre treino, validação ou teste é sinal de possível vazamento e deve ser registrado, não removido silenciosamente.
 
-Triagem dos três modelos em uma seed:
+## Comandos principais
 
-```bash
-python3 scripts/compare_transfer.py \
-  --data-dir dataset \
-  --output-dir runs/transfer_smoke \
-  --seeds 42 \
-  --head-epochs 12 \
-  --finetune-epochs 20 \
-  --batch-size 32 \
-  --num-workers 8 \
-  --device cuda
-```
-
-Comparação formal com três seeds:
+Comparação por validação:
 
 ```bash
 python3 scripts/compare_transfer.py \
@@ -102,29 +78,18 @@ python3 scripts/compare_transfer.py \
   --device cuda
 ```
 
-Treino de um modelo isolado, sem abrir o teste:
-
-```bash
-python3 scripts/train_transfer.py \
-  --data-dir dataset \
-  --output-dir runs/efficientnet_b0_seed42 \
-  --architecture efficientnet_b0 \
-  --seed 42 \
-  --head-epochs 12 \
-  --finetune-epochs 20 \
-  --batch-size 32 \
-  --num-workers 8 \
-  --device cuda
-```
-
-Avaliação final de um checkpoint selecionado por validação:
+Avaliação final de um checkpoint:
 
 ```bash
 python3 scripts/evaluate_transfer.py \
-  --checkpoint runs/efficientnet_b0_seed42/checkpoints/best_val_loss.pt \
+  --checkpoint runs/transfer_comparison/<modelo>/seed_<seed>/checkpoints/best_val_loss.pt \
   --data-dir dataset \
-  --output-dir runs/efficientnet_b0_final_test \
+  --output-dir runs/transfer_final_test/<modelo>/seed_<seed> \
   --batch-size 32 \
   --num-workers 8 \
   --device cuda
 ```
+
+## Artefatos de saída
+
+Cada experimento armazena configuração, ambiente, transforms, histórico por época, summaries JSON, gráficos e predições. Consulte [`runs_to_keep.md`](runs_to_keep.md) para decidir o que versionar após remover checkpoints grandes e tentativas descartadas.
