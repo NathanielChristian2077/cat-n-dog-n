@@ -38,6 +38,11 @@ def test_binary_folder_contract_remaps_positive_class(tmp_path: Path) -> None:
     assert image.shape == (1, 3, 224, 224)
     assert label.item() in {0, 1}
     assert bundle.class_names == ("cats", "dogs")
+    assert bundle.class_counts == {
+        "train": {"negative": 1, "positive": 1},
+        "val": {"negative": 1, "positive": 1},
+        "test": {"negative": 1, "positive": 1},
+    }
 
 
 def test_nested_portuguese_layout_is_resolved_without_copying(tmp_path: Path) -> None:
