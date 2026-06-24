@@ -27,25 +27,25 @@ class ScratchCNN(nn.Module):
         -> [Conv 64->128, Conv 128->128, MaxPool]
         -> AdaptiveAvgPool -> Fully connected 128->128->1 logit.
 
-    It has six convolutional layers, three pooling layers, and fully connected
-    output layers. No torchvision architecture or pretrained weights are imported.
+    The model remains deliberately small and fully authored from basic PyTorch
+    layers. With only a few hundred training images, heavy feature dropout after
+    every block was counterproductive: it made the model underfit before it had
+    established useful visual filters. Regularization now lives mainly in the
+    data pipeline and a light classifier dropout.
     """
 
-    def __init__(self, dropout: float = 0.35) -> None:
+    def __init__(self, dropout: float = 0.10) -> None:
         super().__init__()
         self.features = nn.Sequential(
             ConvNormAct(3, 32),
             ConvNormAct(32, 32),
             nn.MaxPool2d(kernel_size=2, stride=2),
-            nn.Dropout2d(p=0.10),
             ConvNormAct(32, 64),
             ConvNormAct(64, 64),
             nn.MaxPool2d(kernel_size=2, stride=2),
-            nn.Dropout2d(p=0.15),
             ConvNormAct(64, 128),
             ConvNormAct(128, 128),
             nn.MaxPool2d(kernel_size=2, stride=2),
-            nn.Dropout2d(p=0.20),
         )
         self.classifier = nn.Sequential(
             nn.AdaptiveAvgPool2d((1, 1)),
