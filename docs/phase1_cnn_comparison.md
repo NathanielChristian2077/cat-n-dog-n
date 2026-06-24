@@ -1,6 +1,16 @@
 # Comparação Etapa 1 → Etapa 2
 
-A Etapa 2 não copia uma MLP pixel-a-pixel para dentro de uma CNN. A entrada agora é RGB `3×224×224`, e a extração espacial é responsabilidade dos blocos convolucionais. A comparação correta preserva o que é transferível: a **topologia do classificador denso final**.
+A Etapa 2 não copia uma MLP pixel-a-pixel para dentro de uma CNN. A entrada agora é RGB `3×224×224`, e a extração espacial é responsabilidade dos blocos convolucionais. A comparação preserva o que é transferível: a **topologia do classificador denso final**.
+
+## O que está sendo comparado, e o que não está
+
+Esta é uma **ablação de head**, não uma alegação de que uma MLP e uma CNN sejam a mesma arquitetura com outro corte de cabelo.
+
+- Na Etapa 1, o head recebia atributos planos dos pixels.
+- Na Etapa 2, o head recebe um vetor de 128 descritores espaciais aprendido pelo backbone convolucional.
+- Portanto, preservamos a ordem e as larguras relativas das camadas densas vencedoras, mas não o tamanho da primeira matriz de pesos nem o viés espacial da CNN.
+
+A pergunta experimental fica precisa: **qual topologia de decisão que funcionou bem na MLP também se adapta melhor a uma representação convolucional fixa?**
 
 ## Backbone fixo
 
@@ -32,13 +42,15 @@ As variantes `softmax2` retornam **dois logits crus**, não uma camada Softmax e
 
 ## Protocolo de comparação
 
-Mantenha fixos: dataset, splits, transforms, batch size, learning rate, weight decay, número máximo de épocas, scheduler, early stopping e dropout. Varie apenas:
+Mantenha fixos: dataset, splits, transforms, backbone convolucional, batch size, learning rate, weight decay, número máximo de épocas, scheduler, early stopping e dropout. Varie apenas:
 
 1. a sequência de larguras do head;
 2. a parametrização binária da saída: `sigmoid1` ou `softmax2`;
 3. a seed, para separar arquitetura de sorte de inicialização.
 
 A comparação completa usa três seeds: `42`, `73` e `101`, totalizando 18 execuções. Os arquivos `comparison_runs.csv` e `comparison_summary.csv` guardam resultados individuais e médias/desvios-padrão.
+
+O `comparison_summary.csv` é ordenado por **média da melhor loss de validação**, com desvio-padrão como desempate. Métricas de teste permanecem registradas para o relatório final, mas não definem a arquitetura vencedora e não devem orientar novos ajustes.
 
 ## Execução
 
@@ -84,5 +96,3 @@ python -m cnn_cats_dogs.cli \
   --num-workers 8 \
   --device cuda
 ```
-
-Use a perda de validação para decidir quais configurações merecem análise. Depois de fechar o protocolo, reporte o teste como comparação final. Não reescolha arquitetura pelo teste após cada tentativa, porque aí o teste vira validação usando bigode postiço.
