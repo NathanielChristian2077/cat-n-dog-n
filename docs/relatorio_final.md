@@ -351,3 +351,90 @@ Como trabalhos futuros, podem ser investigados o aumento controlado da base de t
 [6] LIU, Z. et al. A ConvNet for the 2020s. In: *Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition*, 2022.
 
 [7] GOODFELLOW, I.; BENGIO, Y.; COURVILLE, A. *Deep Learning*. Cambridge: MIT Press, 2016.
+
+---
+
+# Apêndice A — Resultados complementares do GoMLP / proto-DSAP
+
+Este apêndice registra a extensão experimental desenvolvida no repositório **GoMLP**, branch `proto-DSAP`. Ela não substitui a MLP densa exigida como núcleo da Etapa 1; trata-se de uma investigação adicional sobre como explorar a esparsidade naturalmente induzida pela ReLU. A ideia foi comparar a propagação densa convencional com uma forma de **Dynamic Sparse Activation Propagation (DSAP)** que evita multiplicações associadas a ativações nulas.
+
+## A.1 Representação esparsa dinâmica
+
+Após uma ReLU, toda ativação menor ou igual a zero é convertida em zero e não contribui para a camada seguinte. A variante DSAP representa apenas os neurônios ativos por meio de um vetor compacto, denominado `ActiveVector`, que preserva simultaneamente os índices originais e os valores positivos:
+
+```text
+idx = [j₁, j₂, ..., jₖ]
+val = [aⱼ₁, aⱼ₂, ..., aⱼₖ]
+```
+
+A próxima camada é calculada como:
+
+```text
+zₒ = bₒ + Σⱼ ativo (aⱼ · Wⱼ,ₒ)
+```
+
+Assim, a arquitetura permanece fixa, mas cada imagem ativa uma sub-rede diferente. A versão `threshold = 0` remove somente ativações exatamente nulas e, portanto, deve reproduzir a mesma função da rede densa. Valores positivos de *threshold* removem ativações pequenas adicionais e passam a constituir uma aproximação experimental.
+
+## A.2 Protocolo do protótipo
+
+Os experimentos utilizaram o mesmo problema da Etapa 1: imagens em escala de cinza, redimensionadas para `64 × 64` e vetorizadas em 4096 entradas, com 300 imagens de treino, 100 de validação e 100 de teste. As MLPs utilizaram ReLU nas camadas ocultas, saída sigmoidal e Binary Cross-Entropy.
+
+O benchmark de *forward propagation* foi executado em CPU, com `GOMAXPROCS = 1`, 500 repetições e 50 iterações de aquecimento. Essa decisão isola o custo do cálculo denso e esparso, sem atribuir a goroutines ou à GPU um ganho que ainda não foi medido. Os valores abaixo representam tempo médio por *forward* e não equivalem ao tempo total de treinamento, porque *backpropagation*, leitura dos dados e atualização dos pesos não fazem parte desse microbenchmark.
+
+## A.3 Verificação de equivalência da DSAP exact
+
+A versão `threshold = 0`, denominada **DSAP exact**, foi validada nas arquiteturas `4096 → 64 → 1`, `4096 → 256 → 64 → 1`, `4096 → 128 → 256 → 128 → 1`, `4096 → 256 → 256 → 128 → 1` e `4096 → 512 → 512 → 128 → 1`.
+
+Em todos os casos avaliados, a comparação entre o *forward* denso e o *forward* DSAP exact resultou em:
+
+```text
+mismatch_count_from_dense = 0
+max_abs_diff_from_dense = 0
+```
+
+Portanto, para ativações exatamente nulas produzidas pela ReLU, a representação compacta preservou a saída e as decisões do modelo denso. O experimento demonstra equivalência computacional, não uma melhoria automática de acurácia: a versão exact calcula a mesma função com uma rota de execução diferente.
+
+## A.4 Resultados de desempenho do forward
+
+| Camadas ocultas | Tempo denso (ns/forward) | Tempo DSAP exact (ns/forward) | Redução de tempo | Esparsidade média observada |
+|---|---:|---:|---:|---:|
+| `64` | 251,182 | 232,240 | 7,54% | 53,36% |
+| `256 → 64` | 950,254 | 868,090 | 8,65% | 44,86% |
+| `128 → 256 → 128` | 526,198 | 471,552 | 10,38% | 47,78% |
+| `256 → 256 → 128` | 1.000.383 | 901.491 | 9,89% | — |
+| `512 → 512 → 128` | 2.095.225 | 1.838.661 | 12,25% | — |
+
+A redução de tempo cresceu de aproximadamente 7,5% para 12,2% conforme as redes ficaram mais profundas e largas. Isso é coerente com a hipótese da DSAP: quando uma camada ReLU produz muitos zeros, a camada seguinte pode deixar de executar produtos associados a essas posições. A arquitetura `128 → 256 → 128` apresentou o melhor equilíbrio observado entre economia de tempo e esparsidade, com redução de 10,38% e 47,78% de ativações inativas.
+
+Mesmo assim, os dados não autorizam a frase preguiçosa “esparso é sempre mais rápido”. O ganho depende da taxa de esparsidade, do tamanho das camadas e do custo de compactar/acessar índices. Em hardware e bibliotecas otimizadas para operações densas, esse overhead pode reduzir ou eliminar o benefício observado.
+
+## A.5 Qualidade preditiva e trade-offs de threshold
+
+Na topologia `4096 → 256 → 64 → 1`, a DSAP exact preservou os resultados da versão densa: acurácia de `0,5900`, F1-score de `0,6435`, zero divergências de decisão e esparsidade média de `44,86%`. Em uma topologia mais profunda, `4096 → 128 → 256 → 128 → 1`, foram observados acurácia de `0,6000` e F1-score de `0,6550`, juntamente da redução de tempo de 10,38% apresentada na seção anterior.
+
+Os testes de *threshold* positivo foram tratados como aproximações, e não como equivalência matemática. No modelo `4096 → 256 → 64 → 1`, os limiares entre `1e−6` e `0,001` não alteraram as métricas observadas. O limiar `0,05` manteve zero divergências de decisão naquele experimento e elevou a esparsidade para aproximadamente 47,44%. Já o limiar `0,10` produziu quatro divergências em relação à rede densa, *loss* de `0,735539`, acurácia de `0,6100`, F1-score de `0,6549` e esparsidade de `50,02%`. Em `threshold = 0,25`, a esparsidade subiu para `57,76%`, mas a acurácia e o F1 recuaram para `0,5800` e `0,6250`, respectivamente.
+
+| Modo | Threshold | Acurácia | F1-score | Divergências da rede densa | Esparsidade |
+|---|---:|---:|---:|---:|---:|
+| DSAP exact | 0 | 0,5900 | 0,6435 | 0 | 44,86% |
+| DSAP aproximada | 0,05 | sem alteração observada | sem alteração observada | 0 | 47,44% |
+| DSAP aproximada | 0,10 | 0,6100 | 0,6549 | 4 | 50,02% |
+| DSAP aproximada | 0,25 | 0,5800 | 0,6250 | — | 57,76% |
+
+O aparente ganho de acurácia em `threshold = 0,10` não deve ser interpretado como superioridade da técnica. Como a aproximação muda as ativações e causa decisões diferentes, ela altera a função do classificador. Com apenas 100 exemplos de teste, quatro decisões já são suficientes para produzir uma variação visualmente atraente e estatisticamente bem pouco épica.
+
+## A.6 Leitura crítica dos resultados
+
+A baseline densa original `4096 → 128 → 1`, avaliada em seis seeds, apresentou aproximadamente 57,7% de acurácia média na validação, 49,7% de acurácia média no teste e 43,7% de F1 médio. A melhor acurácia de teste foi 54% e a pior 44%, sinalizando generalização próxima do acaso. Essa limitação é esperada para uma MLP que recebe pixels vetorizados: ela não preserva relações espaciais entre regiões vizinhas da imagem.
+
+A DSAP não foi criada para corrigir essa limitação representacional. Sua contribuição é computacional e metodológica: demonstrar que ativações nulas de ReLU podem ser removidas de forma exata, preservando as saídas da MLP, e medir em quais arquiteturas essa redução de operações supera o overhead da estrutura esparsa.
+
+Os resultados sugerem três conclusões principais:
+
+1. A ReLU produziu esparsidade relevante, entre aproximadamente 44,9% e 53,4% nas arquiteturas medidas;
+2. A DSAP exact preservou integralmente as decisões e os valores do *forward* denso nas arquiteturas testadas;
+3. O ganho de desempenho foi real no microbenchmark de *forward*, variando de 7,54% a 12,25%, mas não deve ser confundido com aceleração equivalente do treinamento completo.
+
+Como continuidade, uma avaliação mais rigorosa pode medir o custo do *backpropagation* esparso, a atualização de parâmetros, a execução com mini-batches maiores e o comportamento em processadores ou kernels especializados. Para o escopo deste trabalho, o protótipo já cumpre o objetivo de mostrar uma extensão experimental controlada da MLP manual, sem tentar vender um `if` em torno de zeros como se a humanidade tivesse acabado de descobrir uma nova física.
+
+**Fonte dos dados:** experimentos locais do repositório GoMLP, branch `proto-DSAP`, com comparação `dense` versus `sparse_exact` e benchmarks de *forward propagation*.
